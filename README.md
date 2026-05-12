@@ -18,9 +18,14 @@ image as `site-packages`.
 ## Install
 
 ```bash
-pip install brain_opt                                  # once released
-pip install /path/to/brain_opt-0.1.0-py3-none-any.whl  # offline / base image
-pip install -e .                                       # from a checkout
+# From GitHub (recommended for now — works in any base image)
+pip install git+https://github.com/Vepricov/brain-opt.git
+
+# From a built wheel (drop into a base image without network)
+pip install /path/to/brain_opt-0.1.0-py3-none-any.whl
+
+# From a checkout
+pip install -e .
 ```
 
 The built wheel is `brain_opt-0.1.0-py3-none-any.whl` — a universal pure
