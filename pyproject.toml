@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brain_opt"
+version = "0.1.0"
+description = "BrainLab optimizer collection: drop-in replacements for torch.optim with SGD, AdamW, SignSGD, Lion, Muon (D-Muon), Shampoo, SOAP."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "BrainLab" }
+]
+keywords = ["pytorch", "optimizer", "muon", "shampoo", "soap", "lion", "deep-learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    # Only torch.linalg.{svd,eigh,qr} is required, available since torch 1.8.
+    # We set the floor at 1.10 to match the practical baseline of modern projects.
+    "torch>=1.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/brainlab/brain_opt"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["brain_opt*"]
+exclude = ["tests*"]
