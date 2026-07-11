@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -100,11 +101,24 @@ def load_cifar10(
     seed: int,
     download: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    from torchvision import datasets, transforms
+    try:
+        from torchvision import datasets, transforms
 
-    transform = transforms.Compose([transforms.ToTensor()])
-    train = datasets.CIFAR10(data_dir, train=True, download=download, transform=transform)
-    test = datasets.CIFAR10(data_dir, train=False, download=download, transform=transform)
+        transform = transforms.Compose([transforms.ToTensor()])
+        train = datasets.CIFAR10(data_dir, train=True, download=download, transform=transform)
+        test = datasets.CIFAR10(data_dir, train=False, download=download, transform=transform)
+        return _sample_torchvision_cifar(train, test, train_samples, test_samples, seed)
+    except ModuleNotFoundError:
+        return _load_hf_cifar10(train_samples=train_samples, test_samples=test_samples, seed=seed)
+
+
+def _sample_torchvision_cifar(
+    train,
+    test,
+    train_samples: int,
+    test_samples: int,
+    seed: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     gen = torch.Generator().manual_seed(seed)
     train_idx = torch.randperm(len(train), generator=gen)[:train_samples].tolist()
     test_idx = torch.randperm(len(test), generator=gen)[:test_samples].tolist()
@@ -115,6 +129,35 @@ def load_cifar10(
     return train_x, train_y, test_x, test_y
 
 
+def _load_hf_cifar10(
+    *,
+    train_samples: int,
+    test_samples: int,
+    seed: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    from datasets import load_dataset
+
+    train = load_dataset("cifar10", split="train")
+    test = load_dataset("cifar10", split="test")
+    gen = torch.Generator().manual_seed(seed)
+    train_idx = torch.randperm(len(train), generator=gen)[:train_samples].tolist()
+    test_idx = torch.randperm(len(test), generator=gen)[:test_samples].tolist()
+    train_x, train_y = _hf_rows_to_tensors(train, train_idx)
+    test_x, test_y = _hf_rows_to_tensors(test, test_idx)
+    return train_x, train_y, test_x, test_y
+
+
+def _hf_rows_to_tensors(dataset, ids: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
+    images = []
+    labels = []
+    for idx in ids:
+        row = dataset[idx]
+        arr = torch.tensor(np.asarray(row["img"]), dtype=torch.float32).permute(2, 0, 1) / 255.0
+        images.append(arr)
+        labels.append(int(row["label"]))
+    return torch.stack(images), torch.tensor(labels, dtype=torch.long)
+
+
 def make_clients(
     x: torch.Tensor,
     y: torch.Tensor,
@@ -122,7 +165,12 @@ def make_clients(
     clients: int,
     samples_per_client: int,
     seed: int,
+    split: str = "label-skew",
 ) -> list[FederatedClient]:
+    if split == "iid":
+        return make_iid_clients(x, y, clients=clients, samples_per_client=samples_per_client, seed=seed)
+    if split != "label-skew":
+        raise ValueError("split must be 'label-skew' or 'iid'")
     gen = torch.Generator().manual_seed(seed)
     by_label = {label: (y == label).nonzero(as_tuple=False).flatten().tolist() for label in range(10)}
     for label, ids in by_label.items():
@@ -143,6 +191,29 @@ def make_clients(
                 ids.append(idx)
                 if len(ids) >= samples_per_client:
                     break
+        out.append(FederatedClient(x=x[ids], y=y[ids], name=f"client-{client_id:03d}"))
+    return out
+
+
+def make_iid_clients(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    clients: int,
+    samples_per_client: int,
+    seed: int,
+) -> list[FederatedClient]:
+    gen = torch.Generator().manual_seed(seed)
+    order = torch.randperm(x.size(0), generator=gen)
+    out: list[FederatedClient] = []
+    for client_id in range(clients):
+        start = client_id * samples_per_client
+        end = start + samples_per_client
+        if end > order.numel():
+            start = 0
+            end = samples_per_client
+            order = order[torch.randperm(order.numel(), generator=gen)]
+        ids = order[start:end].tolist()
         out.append(FederatedClient(x=x[ids], y=y[ids], name=f"client-{client_id:03d}"))
     return out
 
@@ -292,6 +363,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rounds", type=int, default=12)
     parser.add_argument("--updates", type=int, default=40)
     parser.add_argument("--clients-per-round", type=int, default=5)
+    parser.add_argument("--split", choices=["label-skew", "iid"], default="label-skew")
     parser.add_argument("--local-steps", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--model-width", type=int, default=8)
@@ -325,6 +397,7 @@ def main() -> None:
         clients=args.clients,
         samples_per_client=args.samples_per_client,
         seed=args.seed,
+        split=args.split,
     )
     initial_model = SmallResNet(width=args.model_width)
     initial_loss, _ = evaluate(initial_model.to(device), train_x, train_y, device, args.batch_size)

@@ -1,0 +1,54 @@
+{
+  "config": {
+    "out_dir": "/tmp/a2pro_runs/opt3_cifar10_iid_long",
+    "dataset": "cifar10",
+    "data_dir": "data",
+    "download": true,
+    "clients": 40,
+    "samples_per_client": 128,
+    "test_samples": 2000,
+    "rounds": 80,
+    "updates": 160,
+    "clients_per_round": 10,
+    "split": "iid",
+    "local_steps": 5,
+    "batch_size": 32,
+    "model_width": 16,
+    "lr": 0.05,
+    "async_lr": 0.02,
+    "seed": 123,
+    "device": "cuda"
+  },
+  "summaries": [
+    {
+      "method": "FedAvg",
+      "initial_loss": 2.4786516167223454,
+      "final_loss": 1.9866026997566224,
+      "final_accuracy": 0.2705,
+      "points": 80,
+      "final_time": null,
+      "mean_staleness": null,
+      "max_staleness": null
+    },
+    {
+      "method": "AsyncSGD",
+      "initial_loss": 2.4786516167223454,
+      "final_loss": 2.2910619735717774,
+      "final_accuracy": 0.1285,
+      "points": 160,
+      "final_time": 81,
+      "mean_staleness": 4.90625,
+      "max_staleness": 11
+    },
+    {
+      "method": "Async-LocalSGD",
+      "initial_loss": 2.4786516167223454,
+      "final_loss": 2.2158745765686034,
+      "final_accuracy": 0.1915,
+      "points": 160,
+      "final_time": 81,
+      "mean_staleness": 4.90625,
+      "max_staleness": 11
+    }
+  ]
+}

@@ -166,6 +166,31 @@ Optional GSM8K smoke can be added with:
 
 Local note: a tiny real-mode check with Hugging Face downloads was attempted on this machine and was stopped because the process waited on external model or dataset loading. The script itself was validated through the no-download smoke path.
 
+### Real server run
+
+The real OPT-1/2 run was executed on `vv_h200` with `distilgpt2`, `100` fine-tuning steps, `200` HellaSwag validation examples and `20` GSM8K examples.
+
+Artifacts:
+
+- [`artifacts/opt12_lm_real_metrics.csv`](artifacts/opt12_lm_real_metrics.csv)
+- [`artifacts/opt12_lm_real_summary.json`](artifacts/opt12_lm_real_summary.json)
+- [`artifacts/opt12_lm_real_summary.md`](artifacts/opt12_lm_real_summary.md)
+- [`artifacts/opt12_lm_real_val_loss.png`](artifacts/opt12_lm_real_val_loss.png)
+- [`artifacts/opt12_lm_real_hellaswag.png`](artifacts/opt12_lm_real_hellaswag.png)
+- [`artifacts/opt12_lm_real_seconds.png`](artifacts/opt12_lm_real_seconds.png)
+
+Results:
+
+- `AdamW`: train loss `1.7814`, val loss `5.2149`, HellaSwag `0.3000`, GSM8K `0.0000`, peak memory `1783.8 MB`
+- `Lion`: train loss `2.6557`, val loss `7.3762`, HellaSwag `0.2550`, GSM8K `0.0000`, peak memory `2103.7 MB`
+- `Muon`: train loss `2.9208`, val loss `8.2626`, HellaSwag `0.2200`, GSM8K `0.0000`, peak memory `2248.2 MB`
+
+![OPT-1/2 real run HellaSwag](artifacts/opt12_lm_real_hellaswag.png)
+
+![OPT-1/2 real run validation loss](artifacts/opt12_lm_real_val_loss.png)
+
+This is a small server run, not a final benchmark. It is still useful because it exercises the full path: fine-tuning with each optimizer, then downstream evaluation.
+
 ## OPT-3: federated and distributed optimization
 
 Implemented in `brain_opt.federated`.
@@ -297,6 +322,33 @@ python examples/opt3_cifar_federated_demo.py \
   --out-dir runs/opt3_cifar_federated_demo_cifar10
 ```
 
+### Real CIFAR-10 server run
+
+The real OPT-3 CIFAR-10 run was executed on `vv_h200` with IID client splits, `40` clients, `80` FedAvg rounds, `160` async updates and `2000` test examples.
+
+Artifacts:
+
+- [`artifacts/opt3_cifar10_iid_real_metrics.csv`](artifacts/opt3_cifar10_iid_real_metrics.csv)
+- [`artifacts/opt3_cifar10_iid_real_summary.json`](artifacts/opt3_cifar10_iid_real_summary.json)
+- [`artifacts/opt3_cifar10_iid_real_summary.md`](artifacts/opt3_cifar10_iid_real_summary.md)
+- [`artifacts/opt3_cifar10_iid_real_loss_by_step.png`](artifacts/opt3_cifar10_iid_real_loss_by_step.png)
+- [`artifacts/opt3_cifar10_iid_real_final_accuracy.png`](artifacts/opt3_cifar10_iid_real_final_accuracy.png)
+- [`artifacts/opt3_cifar10_iid_real_staleness_hist.png`](artifacts/opt3_cifar10_iid_real_staleness_hist.png)
+
+Results:
+
+- `FedAvg`: final loss `1.9866`, final accuracy `0.2705`
+- `AsyncSGD`: final loss `2.2911`, final accuracy `0.1285`, mean staleness `4.91`
+- `Async-LocalSGD`: final loss `2.2159`, final accuracy `0.1915`, mean staleness `4.91`
+
+![OPT-3 CIFAR-10 real loss by step](artifacts/opt3_cifar10_iid_real_loss_by_step.png)
+
+![OPT-3 CIFAR-10 real final accuracy](artifacts/opt3_cifar10_iid_real_final_accuracy.png)
+
+![OPT-3 CIFAR-10 real staleness](artifacts/opt3_cifar10_iid_real_staleness_hist.png)
+
+This is a short demonstration run. It shows that the code trains a CIFAR-10 model and logs distributed-method metrics. It is not a tuned CIFAR-10 benchmark.
+
 Requirement mapping:
 
 - Closes `ТЗ 4`, point 3.2.3.7, for distributed optimization modifications at simulator level.
@@ -307,7 +359,7 @@ Requirement mapping:
 What is not fully closed:
 
 - It does not satisfy the strict reading of point 3.5.2.1 if actual multi-device training is required.
-- The new script can use CIFAR-10, but the checked-in artifact is a synthetic CIFAR-shaped smoke run, not the full CIFAR-10 run.
+- The new script has a real CIFAR-10 server run, but it is still single-process simulation, not multi-device training.
 - It is not yet an A2.Pro stage.
 
 ## OPT-4: efficient storage through quantization
@@ -430,19 +482,21 @@ What is not fully closed:
 For OPT-1:
 
 - Show the Lion vs AdamW robotics plot.
+- Show the real `distilgpt2` optimizer run with AdamW, Lion and Muon.
 - Say that this is an external run from Dmitry Yudin's team.
 - Do not claim acceptance-level evidence until raw logs and task metadata are received.
 
 For OPT-2:
 
 - Show the Muon vs AdamW robotics plot.
+- Show the same real `distilgpt2` run, where Muon is included.
 - Say the same caveat about missing raw logs and metadata.
 
 For OPT-3:
 
-- Show `opt3_summary.md`.
-- Show the three plots: loss by step, loss by simulated time, staleness histogram.
-- Say directly that it is a simulator-level demo.
+- Show the synthetic federated regression demo for method behavior.
+- Show the CIFAR-10 IID server run for a real image-classification training task.
+- Say directly that it is still a single-process simulator, not multi-device runtime.
 
 For OPT-4:
 
@@ -469,7 +523,7 @@ Needed fields:
 - raw CSV or W&B export
 - mapping from plot color to optimizer
 
-An independent script now exists at `examples/opt12_lm_optimizer_benchmark.py`. HellaSwag is used after fine-tuning, not as a standalone optimizer task. The recommended server run is:
+An independent script now exists at `examples/opt12_lm_optimizer_benchmark.py`. A small server run has already been executed. If we want a stronger result, run the same script with more steps and more HellaSwag examples:
 
 ```bash
 python examples/opt12_lm_optimizer_benchmark.py \
@@ -485,7 +539,7 @@ python examples/opt12_lm_optimizer_benchmark.py \
   --out-dir runs/opt12_lm_optimizer_benchmark_real
 ```
 
-Cheaper server run:
+Cheaper repeat run:
 
 ```bash
 python examples/opt12_lm_optimizer_benchmark.py \
@@ -501,7 +555,7 @@ python examples/opt12_lm_optimizer_benchmark.py \
 
 ### OPT-3
 
-The next OPT-3 step is to run the existing CIFAR script on actual CIFAR-10:
+The CIFAR-10 script has now been run on `vv_h200`. A stronger repeat run can increase rounds, clients, or model width:
 
 ```bash
 python examples/opt3_cifar_federated_demo.py \
@@ -521,7 +575,7 @@ python examples/opt3_cifar_federated_demo.py \
   --out-dir runs/opt3_cifar_federated_demo_cifar10
 ```
 
-This directly targets the distributed-training requirement that mentions CIFAR-10 and ResNet-18-style evaluation. The checked-in smoke run proves the pipeline and artifact generation, not final CIFAR-10 quality.
+This directly targets the distributed-training requirement that mentions CIFAR-10 and ResNet-18-style evaluation. The current run proves the training and artifact pipeline, but it is not a tuned CIFAR-10 benchmark.
 
 If we need to show use of other A2.Pro modules, the practical version is:
 
@@ -538,10 +592,10 @@ We can say that OPT-1, OPT-2, OPT-3 and OPT-4 are wrapped as Python libraries an
 
 We can say that OPT-4 has a completed A2.Pro stand run with output checkpoint and metrics artifact.
 
-We can say that OPT-3 has a reproducible demo with plots and metrics.
+We can say that OPT-3 has a reproducible synthetic demo and a real CIFAR-10 server run with plots and metrics.
 
 We should not say that OPT-3 is already verified on multiple GPUs or clusters.
 
-We should not say that OPT-1 and OPT-2 have acceptance-level benchmark evidence until the raw robotics run logs are received or we run a new benchmark ourselves.
+We should not say that OPT-1 and OPT-2 have acceptance-level robotics benchmark evidence until the raw robotics run logs are received. We do have an independent small LM benchmark.
 
 We should not say that the OPT-4 stand run has clean perplexity until the evaluation wheel is rebuilt and the stage is rerun.

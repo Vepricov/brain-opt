@@ -1,0 +1,35 @@
+[
+  {
+    "optimizer": "AdamW",
+    "train_loss": 1.7814381122589111,
+    "val_loss": 5.214910825093587,
+    "tokens_seen": 50944,
+    "steps": 100,
+    "seconds": 1.495317567139864,
+    "peak_memory_mb": 1783.77587890625,
+    "hellaswag_acc_norm": 0.3,
+    "gsm8k_exact_match": 0.0
+  },
+  {
+    "optimizer": "Lion",
+    "train_loss": 2.655681610107422,
+    "val_loss": 7.376241048177083,
+    "tokens_seen": 50944,
+    "steps": 100,
+    "seconds": 1.1823166944086552,
+    "peak_memory_mb": 2103.66845703125,
+    "hellaswag_acc_norm": 0.255,
+    "gsm8k_exact_match": 0.0
+  },
+  {
+    "optimizer": "Muon",
+    "train_loss": 2.9208030700683594,
+    "val_loss": 8.26260773340861,
+    "tokens_seen": 50944,
+    "steps": 100,
+    "seconds": 2.1226403079926968,
+    "peak_memory_mb": 2248.15283203125,
+    "hellaswag_acc_norm": 0.22,
+    "gsm8k_exact_match": 0.0
+  }
+]
