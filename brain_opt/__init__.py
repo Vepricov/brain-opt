@@ -13,6 +13,8 @@ Public API:
     Shampoo   — Algorithm 2 from Gupta-Koren-Singer (2018). Matrix-method.
     SOAP      — ShampoO with Adam in the Preconditioner's eigenbasis
                 (Vyas et al., 2024). Matrix-method.
+    FedAvg / AsyncSGD / Async-Local SGD — single-process simulators for
+                distributed and federated optimization studies.
 
     get_optimizer(params, name, **kwargs)  — factory by name with
         unified learning rate (``lr=1e-3`` works across all methods).
@@ -26,6 +28,15 @@ of ``torch.optim.AdamW``).
 from torch.optim import SGD, AdamW
 
 from .factory import get_optimizer
+from .federated import (
+    AsyncConfig,
+    FedAvgConfig,
+    FederatedClient,
+    FederatedResult,
+    run_async_local_sgd,
+    run_async_sgd,
+    run_fedavg,
+)
 from .lion import Lion
 from .lr_scaling import LR_MULTIPLIERS, scale_lr
 from .muon import Muon
@@ -41,9 +52,16 @@ __all__ = [
     "Muon",
     "Shampoo",
     "SOAP",
+    "FederatedClient",
+    "FederatedResult",
+    "FedAvgConfig",
+    "AsyncConfig",
+    "run_fedavg",
+    "run_async_sgd",
+    "run_async_local_sgd",
     "get_optimizer",
     "scale_lr",
     "LR_MULTIPLIERS",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

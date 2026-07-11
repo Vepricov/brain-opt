@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brain_opt"
-version = "0.1.0"
-description = "BrainLab optimizer collection: drop-in replacements for torch.optim with SGD, AdamW, SignSGD, Lion, Muon (D-Muon), Shampoo, SOAP."
+version = "0.2.0"
+description = "BrainLab optimizer collection: drop-in optimizers plus federated optimization simulators."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "BrainLab" }
 ]
-keywords = ["pytorch", "optimizer", "muon", "shampoo", "soap", "lion", "deep-learning"]
+keywords = ["pytorch", "optimizer", "federated-learning", "fedavg", "muon", "shampoo", "soap", "lion", "deep-learning"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",

@@ -9,3 +9,4 @@ dist/
 .venv/
 venv/
 .DS_Store
+/runs/

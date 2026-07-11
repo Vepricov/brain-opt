@@ -1,0 +1,52 @@
+[
+  {
+    "method": "FedAvg-5clients",
+    "initial_loss": 11.55747526884079,
+    "final_loss": 0.0010111051713465713,
+    "improvement_x": 11430.537194710178,
+    "points": 40,
+    "final_time": null,
+    "mean_staleness": null,
+    "max_staleness": null
+  },
+  {
+    "method": "FedAvg-10clients",
+    "initial_loss": 11.55747526884079,
+    "final_loss": 0.0010317490465240552,
+    "improvement_x": 11201.827913267984,
+    "points": 40,
+    "final_time": null,
+    "mean_staleness": null,
+    "max_staleness": null
+  },
+  {
+    "method": "FedAvg-20clients",
+    "initial_loss": 11.55747526884079,
+    "final_loss": 0.00102189692115644,
+    "improvement_x": 11309.82492418282,
+    "points": 40,
+    "final_time": null,
+    "mean_staleness": null,
+    "max_staleness": null
+  },
+  {
+    "method": "AsyncSGD",
+    "initial_loss": 11.55747526884079,
+    "final_loss": 1.0741777777671815,
+    "improvement_x": 10.759369173382556,
+    "points": 160,
+    "final_time": 71,
+    "mean_staleness": 6.825,
+    "max_staleness": 16
+  },
+  {
+    "method": "Async-LocalSGD",
+    "initial_loss": 11.55747526884079,
+    "final_loss": 0.003963358275359497,
+    "improvement_x": 2916.081379948541,
+    "points": 100,
+    "final_time": 49,
+    "mean_staleness": 6.72,
+    "max_staleness": 14
+  }
+]

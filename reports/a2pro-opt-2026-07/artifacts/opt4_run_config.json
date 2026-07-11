@@ -1,0 +1,21 @@
+{
+  "model_id": "Qwen/Qwen3-8B",
+  "output_dir": "checkpoints/Qwen3-8B-W8A8",
+  "device": "cuda:0",
+  "quant": {
+    "recipe": "w8a8",
+    "calibration_dataset": "HuggingFaceH4/ultrachat_200k",
+    "num_calibration_samples": 256,
+    "max_seq_length": 2048,
+    "smoothing_strength": 0.8
+  },
+  "eval": {
+    "ppl_dataset": "wikitext",
+    "ppl_dataset_config": "wikitext-2-raw-v1",
+    "ppl_max_samples": 256,
+    "latency_prompt": "Explain quantization of large language models in two sentences.",
+    "latency_max_new_tokens": 128,
+    "latency_runs": 5
+  },
+  "seed": 42
+}

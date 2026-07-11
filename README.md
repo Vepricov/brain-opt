@@ -15,6 +15,15 @@ image as `site-packages`.
 | Shampoo  | `brain_opt.Shampoo` | canonical Algorithm 2 from Gupta-Koren-Singer 2018. **Matrix method.** |
 | SOAP     | `brain_opt.SOAP`    | Adam in Shampoo's eigenbasis, Vyas et al. 2024. **Matrix method.** |
 
+Federated / distributed optimization simulators are available under the
+same pure-Python package:
+
+| method            | function                         | purpose |
+|-------------------|----------------------------------|---------|
+| FedAvg            | `brain_opt.run_fedavg`           | synchronous federated averaging with configurable client sampling |
+| AsyncSGD          | `brain_opt.run_async_sgd`        | delayed client gradients with server-side staleness weighting |
+| Async-Local SGD   | `brain_opt.run_async_local_sgd`  | delayed local-SGD deltas with simulated latency/staleness |
+
 ## Install
 
 ```bash
@@ -22,13 +31,13 @@ image as `site-packages`.
 pip install git+https://github.com/Vepricov/brain-opt.git
 
 # From a built wheel (drop into a base image without network)
-pip install /path/to/brain_opt-0.1.0-py3-none-any.whl
+pip install /path/to/brain_opt-0.2.0-py3-none-any.whl
 
 # From a checkout
 pip install -e .
 ```
 
-The built wheel is `brain_opt-0.1.0-py3-none-any.whl` — a universal pure
+The built wheel is `brain_opt-0.2.0-py3-none-any.whl` — a universal pure
 Python 3 wheel. You can copy it into your base image and `pip
 install` it, or unpack the `brain_opt/` directory directly into your
 project's `site-packages`. No compilation, no native extensions, no
@@ -143,6 +152,58 @@ matrices automatically fall back to AdamW. You can override the
 classification by setting `state[p]["use_muon"]` after construction, or
 by passing `"use_muon": False` inside a parameter group.
 
+## Federated optimization simulators
+
+`brain_opt.federated` covers the distributed-optimization part of the
+package without requiring a real cluster. Clients are local PyTorch
+tensors; latency and staleness are simulated in one Python process. This
+is intended for reproducible method comparisons before wiring the methods
+into a real scheduler.
+
+```python
+import torch
+import torch.nn as nn
+
+from brain_opt import (
+    AsyncConfig,
+    FedAvgConfig,
+    FederatedClient,
+    run_async_local_sgd,
+    run_async_sgd,
+    run_fedavg,
+)
+
+clients = [
+    FederatedClient(x=torch.randn(32, 8), y=torch.randn(32, 1), name=f"c{i}")
+    for i in range(20)
+]
+model = nn.Linear(8, 1)
+
+# FedAvg with 5 active clients per round.
+fedavg = run_fedavg(
+    model,
+    clients,
+    FedAvgConfig(rounds=20, clients_per_round=5, local_steps=3, lr=0.05),
+)
+
+# Asynchronous updates with simulated delay and staleness weighting.
+async_sgd = run_async_sgd(
+    nn.Linear(8, 1),
+    clients,
+    AsyncConfig(updates=100, lr=0.02, max_pending=8, max_delay=5),
+)
+async_local = run_async_local_sgd(
+    nn.Linear(8, 1),
+    clients,
+    AsyncConfig(updates=100, local_steps=3, lr=0.05, max_pending=8),
+)
+```
+
+Every result exposes `result.model` and a list of metric dictionaries in
+`result.history`. Async histories include `time`, `staleness` and
+`staleness_weight`, which are the main quantities to plot against loss or
+accuracy in a simulation study.
+
 ## Sources / credit
 
 * Lion — https://github.com/google/automl/tree/master/lion
@@ -161,8 +222,8 @@ pytest -q
 ```
 
 15 smoke tests cover convergence of every method through the factory at
-`lr=1e-3`, the `scale_lr` mapping, factory name resolution and the
-public API.
+`lr=1e-3`, the `scale_lr` mapping, factory name resolution, the public API
+and the federated simulators.
 
 ## License
 
