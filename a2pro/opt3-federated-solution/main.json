@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "pipeline": {
+    "name": "a2pro-opt3-federated",
+    "title": "OPT-3 Федеративная оптимизация",
+    "description": "A2.Pro Format 2 решение для демонстрации FedAvg, AsyncSGD и Async-Local SGD. Методы вызываются из Python-библиотеки brain_opt, которая должна входить в базовый образ.",
+    "version": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0,
+      "postfix": null
+    },
+    "tags": [
+      {
+        "name": "federated-optimization",
+        "title": "Федеративная оптимизация"
+      },
+      {
+        "name": "base-image-library",
+        "title": "Вызов библиотеки из БО"
+      }
+    ],
+    "type": "custom",
+    "documentationPath": "./README.md",
+    "stages": [
+      {
+        "name": "federated_train",
+        "title": "Федеративное обучение",
+        "description": "Запускает FedAvg, AsyncSGD и Async-Local SGD из brain_opt на симулированных клиентах и сохраняет обученный чекпоинт с метриками.",
+        "manifestPath": "./stages/federated_train/stage.json"
+      }
+    ],
+    "connections": []
+  }
+}

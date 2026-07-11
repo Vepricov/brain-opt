@@ -1,0 +1,278 @@
+{
+  "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0,
+    "postfix": null
+  },
+  "image": {
+    "name": "a2pro-opt3-federated:v1.0.0-base-optlibs"
+  },
+  "entrypoint": "python src/federated_train_main.py",
+  "parameters": [
+    {
+      "name": "simulation",
+      "title": "Симуляция клиентов",
+      "description": "Конфигурация федеративного датасета и набора методов.",
+      "type": "section",
+      "properties": {
+        "expanded": true,
+        "widgets": [
+          {
+            "name": "method",
+            "type": "enum",
+            "title": "Метод",
+            "description": "Какие методы OPT-3 запустить.",
+            "properties": {
+              "defaultValue": "all",
+              "availableValues": [
+                "all",
+                "fedavg",
+                "async_sgd",
+                "async_local_sgd"
+              ]
+            }
+          },
+          {
+            "name": "clients",
+            "type": "int",
+            "title": "Клиентов",
+            "description": "Число симулированных клиентов.",
+            "properties": {
+              "defaultValue": 20,
+              "minimumValue": 2,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 200,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "samplesPerClient",
+            "type": "int",
+            "title": "Сэмплов на клиента",
+            "description": "Локальный размер данных одного клиента.",
+            "properties": {
+              "defaultValue": 24,
+              "minimumValue": 4,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 512,
+              "exclusiveMaximumValue": false,
+              "step": 4
+            }
+          },
+          {
+            "name": "testSamples",
+            "type": "int",
+            "title": "Тестовых сэмплов",
+            "description": "Размер тестовой выборки для итоговой accuracy.",
+            "properties": {
+              "defaultValue": 256,
+              "minimumValue": 32,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 4096,
+              "exclusiveMaximumValue": false,
+              "step": 32
+            }
+          },
+          {
+            "name": "split",
+            "type": "enum",
+            "title": "Разбиение",
+            "description": "IID или label-skew распределение данных по клиентам.",
+            "properties": {
+              "defaultValue": "label-skew",
+              "availableValues": [
+                "label-skew",
+                "iid"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "training",
+      "title": "Обучение",
+      "description": "Гиперпараметры локального и серверного обучения.",
+      "type": "section",
+      "properties": {
+        "expanded": true,
+        "widgets": [
+          {
+            "name": "rounds",
+            "type": "int",
+            "title": "FedAvg раундов",
+            "description": "Число синхронных раундов FedAvg.",
+            "properties": {
+              "defaultValue": 12,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1000,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "updates",
+            "type": "int",
+            "title": "Async updates",
+            "description": "Число асинхронных обновлений сервера.",
+            "properties": {
+              "defaultValue": 40,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 5000,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "clientsPerRound",
+            "type": "int",
+            "title": "Клиентов в раунде",
+            "description": "Сколько клиентов участвует в одном FedAvg раунде.",
+            "properties": {
+              "defaultValue": 5,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 200,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "localSteps",
+            "type": "int",
+            "title": "Локальных шагов",
+            "description": "Число SGD шагов на клиенте.",
+            "properties": {
+              "defaultValue": 2,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 50,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "batchSize",
+            "type": "int",
+            "title": "Batch size",
+            "description": "Размер локального mini-batch.",
+            "properties": {
+              "defaultValue": 16,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 512,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "modelWidth",
+            "type": "int",
+            "title": "Ширина модели",
+            "description": "Ширина небольшой CNN модели.",
+            "properties": {
+              "defaultValue": 8,
+              "minimumValue": 4,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 64,
+              "exclusiveMaximumValue": false,
+              "step": 4
+            }
+          },
+          {
+            "name": "lr",
+            "type": "float",
+            "title": "Local LR",
+            "description": "Learning rate для FedAvg и Async-Local SGD.",
+            "properties": {
+              "defaultValue": 0.05,
+              "minimumValue": 0.0001,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1.0,
+              "exclusiveMaximumValue": false,
+              "step": 0.005
+            }
+          },
+          {
+            "name": "asyncLr",
+            "type": "float",
+            "title": "Async LR",
+            "description": "Learning rate для AsyncSGD.",
+            "properties": {
+              "defaultValue": 0.02,
+              "minimumValue": 0.0001,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1.0,
+              "exclusiveMaximumValue": false,
+              "step": 0.005
+            }
+          },
+          {
+            "name": "seed",
+            "type": "int",
+            "title": "Seed",
+            "description": "Seed генерации данных и client sampling.",
+            "properties": {
+              "defaultValue": 123,
+              "minimumValue": 0,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1000000,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "name": "out_model",
+      "title": "Обученная модель",
+      "description": "Checkpoint лучшей модели по test accuracy.",
+      "alwaysExpected": true,
+      "type": "checkpoint-collection",
+      "properties": {
+        "exportedToWorkspaces": [
+          "optimization/federated"
+        ]
+      }
+    },
+    {
+      "name": "out_metrics",
+      "title": "Метрики федеративного обучения",
+      "description": "CSV/JSON/Markdown с loss, accuracy и staleness.",
+      "alwaysExpected": true,
+      "type": "artifact",
+      "properties": {}
+    }
+  ],
+  "resources": {
+    "supportedUnits": [
+      {
+        "type": "GPU",
+        "minimum": 1,
+        "maximum": null,
+        "replicas": {
+          "minimum": 1,
+          "maximum": 1
+        },
+        "step": 1,
+        "sharedMemory": 1024,
+        "memorySize": 8192,
+        "properties": {
+          "unitMemorySize": 8192,
+          "frameworks": [
+            "cuda"
+          ],
+          "cpuNumberPerUnit": 4
+        }
+      }
+    ]
+  }
+}

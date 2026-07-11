@@ -10,11 +10,11 @@ The report is GitHub-ready. All images and data files are stored under `artifact
 
 OPT-1 and OPT-2 are implemented in `brain_opt` as a Python optimizer library. There is external evidence from Dmitry Yudin's team on a robotics training task, but the raw logs and exact task description are not in this repository yet.
 
-OPT-3 is implemented in `brain_opt==0.2.0` as a single-process federated optimization simulator. It has a reproducible demo with CSV, JSON, Markdown summary and plots.
+OPT-3 is implemented in `brain_opt==0.2.0` as a single-process federated optimization simulator. It has a reproducible demo with CSV, JSON, Markdown summary and plots. It also has a minimal A2.Pro Format 2 package that calls `brain_opt` from the base image and writes `out_model` plus `out_metrics`.
 
 OPT-4 is implemented as the `a2_kvant` Python library and as the A2.Pro `quantize` stage. It has two demonstrations: a Qwen3-8B benchmark with resource and quality metrics, and a completed A2.Pro stand run that writes a quantized checkpoint and metrics artifact.
 
-Main caveat: OPT-3 is currently a simulator, not a real multi-device distributed runtime. It is enough for algorithm demonstration, but not enough if acceptance requires actual training across several devices.
+Main caveat: OPT-3 is currently a simulator, not a real multi-device distributed runtime. The A2.Pro package has been smoke-tested offline, but it has not yet been executed on the stand.
 
 ## Technical requirements checked
 
@@ -48,7 +48,13 @@ from brain_opt import get_optimizer, run_fedavg
 
 This is the right integration path: the solution code contains the PlatformAPI wrapper, while the optimization methods live in the base image.
 
-Current limitation: after upgrading `brain_opt` to `0.2.0`, the package was rebuilt on `vv_h200`, but the A2.Pro stand package was not re-uploaded. The completed stand run proves OPT-4 and the base-library path, but it does not prove OPT-3 import in the stand UI environment.
+The OPT-3 A2.Pro package is stored at [`../../a2pro/opt3-federated-solution`](../../a2pro/opt3-federated-solution). Its Dockerfile fails early if `brain_opt` is missing from the base image:
+
+```python
+from brain_opt import run_fedavg, run_async_sgd, run_async_local_sgd
+```
+
+Current limitation: the completed stand run proves OPT-4 and the base-library path. OPT-3 now has a Format 2 package and offline smoke outputs, but still needs one stand run to prove the UI/runtime path.
 
 ## OPT-1: memory-efficient optimizers
 
@@ -349,18 +355,55 @@ Results:
 
 This is a short demonstration run. It shows that the code trains a CIFAR-10 model and logs distributed-method metrics. It is not a tuned CIFAR-10 benchmark.
 
+### A2.Pro stage package
+
+I added a minimal Format 2 package for OPT-3:
+
+- [`../../a2pro/opt3-federated-solution/main.json`](../../a2pro/opt3-federated-solution/main.json)
+- [`../../a2pro/opt3-federated-solution/stages/federated_train/stage.json`](../../a2pro/opt3-federated-solution/stages/federated_train/stage.json)
+- [`../../a2pro/opt3-federated-solution/src/federated_train_main.py`](../../a2pro/opt3-federated-solution/src/federated_train_main.py)
+- [`../../a2pro/opt3-federated-solution/Dockerfile`](../../a2pro/opt3-federated-solution/Dockerfile)
+
+The stage calls the same `brain_opt` public API from the base image, not a local algorithm copy:
+
+```python
+from brain_opt import AsyncConfig, FedAvgConfig, run_async_local_sgd, run_async_sgd, run_fedavg
+```
+
+Offline smoke command:
+
+```bash
+FEDERATED_OFFLINE=1 PYTHONPATH=src:/path/to/brain-opt python src/federated_train_main.py
+```
+
+Sample outputs:
+
+- [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/summary.md`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/summary.md)
+- [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/summary.json`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/summary.json)
+- [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/metrics.csv`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/metrics.csv)
+- [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/loss_by_step.png`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/loss_by_step.png)
+- [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/final_accuracy.png`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/final_accuracy.png)
+- [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/staleness_hist.png`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/staleness_hist.png)
+
+Smoke result:
+
+- `FedAvg`: final loss `0.8816`, final accuracy `0.9609`
+- `AsyncSGD`: final loss `2.2907`, final accuracy `0.2188`, mean staleness `4.62`
+- `Async-LocalSGD`: final loss `2.0089`, final accuracy `0.2031`, mean staleness `4.62`
+
 Requirement mapping:
 
 - Closes `ТЗ 4`, point 3.2.3.7, for distributed optimization modifications at simulator level.
 - Closes the supplement, point 2.5, for efficient distributed optimization methods at simulator level.
 - Closes the supplement, point 3.4, as experimental Python code.
+- Closes the supplement, point 3.5.2.6 at integration-package level: OPT-3 is callable as an A2.Pro stage and writes platform outputs.
 - Partially closes the supplement, point 3.7.2, because the demo compares FedAvg, AsyncSGD and Async-LocalSGD by loss, simulated time and staleness.
 
 What is not fully closed:
 
 - It does not satisfy the strict reading of point 3.5.2.1 if actual multi-device training is required.
 - The new script has a real CIFAR-10 server run, but it is still single-process simulation, not multi-device training.
-- It is not yet an A2.Pro stage.
+- The A2.Pro stage has an offline smoke run, but not yet a completed stand run.
 
 ## OPT-4: efficient storage through quantization
 
@@ -496,6 +539,7 @@ For OPT-3:
 
 - Show the synthetic federated regression demo for method behavior.
 - Show the CIFAR-10 IID server run for a real image-classification training task.
+- Show the A2.Pro Format 2 package and its sample `out_model`/`out_metrics` outputs.
 - Say directly that it is still a single-process simulator, not multi-device runtime.
 
 For OPT-4:
@@ -577,14 +621,14 @@ python examples/opt3_cifar_federated_demo.py \
 
 This directly targets the distributed-training requirement that mentions CIFAR-10 and ResNet-18-style evaluation. The current run proves the training and artifact pipeline, but it is not a tuned CIFAR-10 benchmark.
 
-If we need to show use of other A2.Pro modules, the practical version is:
+The simple A2.Pro package now exists. The next practical step is to run it on the stand:
 
-- take dataset input through the platform dataset or artifact interface
-- take optional initial checkpoint through the platform checkpoint interface
-- run federated training inside the OPT-3 stage
-- write output model checkpoint and metrics artifacts back to A2.Pro
+- build `a2pro-opt3-federated:v1.0.0-base-optlibs`
+- upload the Format 2 package
+- start `federated_train`
+- collect the run id, output checkpoint id and metrics artifact id
 
-That would make OPT-3 look like a real platform component rather than a local library demo.
+After that run, OPT-3 will have the same platform-demonstration shape as OPT-4.
 
 ## Honest status
 
@@ -592,9 +636,11 @@ We can say that OPT-1, OPT-2, OPT-3 and OPT-4 are wrapped as Python libraries an
 
 We can say that OPT-4 has a completed A2.Pro stand run with output checkpoint and metrics artifact.
 
-We can say that OPT-3 has a reproducible synthetic demo and a real CIFAR-10 server run with plots and metrics.
+We can say that OPT-3 has a reproducible synthetic demo, a real CIFAR-10 server run, and a minimal A2.Pro Format 2 stage package with offline smoke outputs.
 
 We should not say that OPT-3 is already verified on multiple GPUs or clusters.
+
+We should not say that OPT-3 already has a completed stand run until `federated_train` is uploaded and executed on A2.Pro.
 
 We should not say that OPT-1 and OPT-2 have acceptance-level robotics benchmark evidence until the raw robotics run logs are received. We do have an independent small LM benchmark.
 

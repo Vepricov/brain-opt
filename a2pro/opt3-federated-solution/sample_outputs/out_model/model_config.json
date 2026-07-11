@@ -1,0 +1,29 @@
+{
+  "architecture": "federated-cifar-smallcnn",
+  "framework": "torch:2.10.0",
+  "model_class": "SmallCnn",
+  "metadata": {
+    "library": "brain_opt",
+    "brain_opt_version": "0.2.0",
+    "architecture": "federated-cifar-smallcnn",
+    "dataset": "synthetic-cifar-shaped",
+    "config": {
+      "method": "all",
+      "clients": 20,
+      "samples_per_client": 24,
+      "test_samples": 256,
+      "split": "label-skew",
+      "rounds": 12,
+      "updates": 40,
+      "clients_per_round": 5,
+      "local_steps": 2,
+      "batch_size": 16,
+      "model_width": 8,
+      "lr": 0.05,
+      "async_lr": 0.02,
+      "seed": 123,
+      "device": "cpu"
+    },
+    "best_method": "FedAvg"
+  }
+}
