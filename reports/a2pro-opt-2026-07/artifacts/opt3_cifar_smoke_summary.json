@@ -1,0 +1,53 @@
+{
+  "config": {
+    "out_dir": "runs/opt3_cifar_federated_demo_smoke",
+    "dataset": "synthetic",
+    "data_dir": "data",
+    "download": false,
+    "clients": 16,
+    "samples_per_client": 24,
+    "test_samples": 240,
+    "rounds": 12,
+    "updates": 36,
+    "clients_per_round": 6,
+    "local_steps": 3,
+    "batch_size": 12,
+    "model_width": 8,
+    "lr": 0.08,
+    "async_lr": 0.04,
+    "seed": 123,
+    "device": "cpu"
+  },
+  "summaries": [
+    {
+      "method": "FedAvg",
+      "initial_loss": 2.467151168733835,
+      "final_loss": 1.9991490989923477,
+      "final_accuracy": 0.2,
+      "points": 12,
+      "final_time": null,
+      "mean_staleness": null,
+      "max_staleness": null
+    },
+    {
+      "method": "AsyncSGD",
+      "initial_loss": 2.467151168733835,
+      "final_loss": 2.272586017847061,
+      "final_accuracy": 0.1,
+      "points": 36,
+      "final_time": 22,
+      "mean_staleness": 4.583333333333333,
+      "max_staleness": 8
+    },
+    {
+      "method": "Async-LocalSGD",
+      "initial_loss": 2.467151168733835,
+      "final_loss": 2.314584881067276,
+      "final_accuracy": 0.1,
+      "points": 36,
+      "final_time": 18,
+      "mean_staleness": 4.583333333333333,
+      "max_staleness": 11
+    }
+  ]
+}

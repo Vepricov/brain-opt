@@ -111,6 +111,61 @@ Status of this evidence:
 - Not enough for a strict report yet because the plot has no legend, no raw logs, no model name, no dataset name and no exact command.
 - To make it acceptance-ready, we need the same metadata as for OPT-1.
 
+### Independent LM benchmark script
+
+I added a standalone script for an independent OPT-1/2 run:
+
+```bash
+python examples/opt12_lm_optimizer_benchmark.py \
+  --smoke \
+  --steps 12 \
+  --batch-size 8 \
+  --seq-len 48 \
+  --out-dir runs/opt12_lm_optimizer_benchmark_smoke
+```
+
+Smoke artifacts:
+
+- [`artifacts/opt12_lm_smoke_metrics.csv`](artifacts/opt12_lm_smoke_metrics.csv)
+- [`artifacts/opt12_lm_smoke_summary.json`](artifacts/opt12_lm_smoke_summary.json)
+- [`artifacts/opt12_lm_smoke_summary.md`](artifacts/opt12_lm_smoke_summary.md)
+- [`artifacts/opt12_lm_smoke_val_loss.png`](artifacts/opt12_lm_smoke_val_loss.png)
+
+Smoke result:
+
+- `AdamW`: train loss `4.1023`, val loss `4.0944`
+- `Lion`: train loss `4.0915`, val loss `4.0822`
+- `Muon`: train loss `4.0409`, val loss `4.0308`
+
+![OPT-1/2 smoke validation loss](artifacts/opt12_lm_smoke_val_loss.png)
+
+This smoke run proves that the same script can train with AdamW, Lion and Muon through the `brain_opt` API. It is not a benchmark claim.
+
+The real HellaSwag command is:
+
+```bash
+python examples/opt12_lm_optimizer_benchmark.py \
+  --model distilgpt2 \
+  --dataset wikitext \
+  --dataset-config wikitext-2-raw-v1 \
+  --dataset-split train \
+  --max-train-samples 1024 \
+  --steps 500 \
+  --batch-size 4 \
+  --seq-len 256 \
+  --optimizers AdamW Lion Muon \
+  --hellaswag-samples 1000 \
+  --out-dir runs/opt12_lm_optimizer_benchmark_real
+```
+
+Optional GSM8K smoke can be added with:
+
+```bash
+--gsm8k-samples 100
+```
+
+Local note: a tiny real-mode check with Hugging Face downloads was attempted on this machine and was stopped because the process waited on external model or dataset loading. The script itself was validated through the no-download smoke path.
+
 ## OPT-3: federated and distributed optimization
 
 Implemented in `brain_opt.federated`.
@@ -178,6 +233,70 @@ Results:
 
 ![OPT-3 async staleness distribution](artifacts/opt3_staleness_hist.png)
 
+### CIFAR-shaped federated demo
+
+I added a second OPT-3 script focused on the distributed-training requirement:
+
+```bash
+python examples/opt3_cifar_federated_demo.py \
+  --dataset synthetic \
+  --clients 16 \
+  --samples-per-client 24 \
+  --test-samples 240 \
+  --rounds 12 \
+  --updates 36 \
+  --clients-per-round 6 \
+  --local-steps 3 \
+  --batch-size 12 \
+  --model-width 8 \
+  --lr 0.08 \
+  --async-lr 0.04 \
+  --out-dir runs/opt3_cifar_federated_demo_smoke
+```
+
+This default smoke mode uses a synthetic CIFAR-shaped dataset. It has image tensors of shape `3x32x32`, ten classes, non-IID client splits, and a small ResNet-style model with residual blocks. It runs without downloads.
+
+Smoke artifacts:
+
+- [`artifacts/opt3_cifar_smoke_metrics.csv`](artifacts/opt3_cifar_smoke_metrics.csv)
+- [`artifacts/opt3_cifar_smoke_summary.json`](artifacts/opt3_cifar_smoke_summary.json)
+- [`artifacts/opt3_cifar_smoke_summary.md`](artifacts/opt3_cifar_smoke_summary.md)
+- [`artifacts/opt3_cifar_smoke_loss_by_step.png`](artifacts/opt3_cifar_smoke_loss_by_step.png)
+- [`artifacts/opt3_cifar_smoke_final_accuracy.png`](artifacts/opt3_cifar_smoke_final_accuracy.png)
+- [`artifacts/opt3_cifar_smoke_staleness_hist.png`](artifacts/opt3_cifar_smoke_staleness_hist.png)
+
+Smoke result:
+
+- `FedAvg`: final loss `1.9991`, final accuracy `0.2000`
+- `AsyncSGD`: final loss `2.2726`, final accuracy `0.1000`, mean staleness `4.58`
+- `Async-LocalSGD`: final loss `2.3146`, final accuracy `0.1000`, mean staleness `4.58`
+
+![OPT-3 CIFAR-shaped loss by step](artifacts/opt3_cifar_smoke_loss_by_step.png)
+
+![OPT-3 CIFAR-shaped final accuracy](artifacts/opt3_cifar_smoke_final_accuracy.png)
+
+![OPT-3 CIFAR-shaped staleness](artifacts/opt3_cifar_smoke_staleness_hist.png)
+
+For the real CIFAR-10 run:
+
+```bash
+python examples/opt3_cifar_federated_demo.py \
+  --dataset cifar10 \
+  --download \
+  --clients 40 \
+  --samples-per-client 64 \
+  --test-samples 2000 \
+  --rounds 50 \
+  --updates 150 \
+  --clients-per-round 10 \
+  --local-steps 4 \
+  --batch-size 32 \
+  --model-width 16 \
+  --lr 0.05 \
+  --async-lr 0.02 \
+  --out-dir runs/opt3_cifar_federated_demo_cifar10
+```
+
 Requirement mapping:
 
 - Closes `ТЗ 4`, point 3.2.3.7, for distributed optimization modifications at simulator level.
@@ -188,7 +307,7 @@ Requirement mapping:
 What is not fully closed:
 
 - It does not satisfy the strict reading of point 3.5.2.1 if actual multi-device training is required.
-- It does not yet use CIFAR-10, ResNet-18 or nanoGPT from the distributed-training requirement.
+- The new script can use CIFAR-10, but the checked-in artifact is a synthetic CIFAR-shaped smoke run, not the full CIFAR-10 run.
 - It is not yet an A2.Pro stage.
 
 ## OPT-4: efficient storage through quantization
@@ -336,7 +455,7 @@ For OPT-4:
 
 ### OPT-1 and OPT-2
 
-First, ask Dmitry's team for the raw run metadata. This is faster and more valuable than starting a new benchmark immediately.
+First, ask Dmitry's team for the raw run metadata. This is faster and more valuable than starting another benchmark immediately.
 
 Needed fields:
 
@@ -350,30 +469,59 @@ Needed fields:
 - raw CSV or W&B export
 - mapping from plot color to optimizer
 
-If an independent benchmark is still needed, the best next run is not plain HellaSwag. HellaSwag is an evaluation task, not an optimizer-training task by itself. A better optimizer demo is:
+An independent script now exists at `examples/opt12_lm_optimizer_benchmark.py`. HellaSwag is used after fine-tuning, not as a standalone optimizer task. The recommended server run is:
 
-- fine-tune a small language model with AdamW, Lion and Muon
-- evaluate the resulting checkpoints on HellaSwag and optionally GSM8K
-- report training loss, validation loss, HellaSwag accuracy, wall-clock time and peak memory
+```bash
+python examples/opt12_lm_optimizer_benchmark.py \
+  --model distilgpt2 \
+  --dataset wikitext \
+  --dataset-config wikitext-2-raw-v1 \
+  --max-train-samples 1024 \
+  --steps 500 \
+  --batch-size 4 \
+  --seq-len 256 \
+  --optimizers AdamW Lion Muon \
+  --hellaswag-samples 1000 \
+  --out-dir runs/opt12_lm_optimizer_benchmark_real
+```
 
-Cheaper alternative:
+Cheaper server run:
 
-- train nanoGPT or a small Transformer on a small text corpus
-- compare AdamW, Lion and Muon by validation loss, time and memory
+```bash
+python examples/opt12_lm_optimizer_benchmark.py \
+  --model sshleifer/tiny-gpt2 \
+  --max-train-samples 256 \
+  --steps 100 \
+  --batch-size 2 \
+  --seq-len 128 \
+  --optimizers AdamW Lion Muon \
+  --hellaswag-samples 100 \
+  --out-dir runs/opt12_lm_optimizer_benchmark_tiny
+```
 
 ### OPT-3
 
-The strongest next demo for the current TЗ is CIFAR-10 with a ResNet-style model and federated client splits.
+The next OPT-3 step is to run the existing CIFAR script on actual CIFAR-10:
 
-Recommended path:
+```bash
+python examples/opt3_cifar_federated_demo.py \
+  --dataset cifar10 \
+  --download \
+  --clients 40 \
+  --samples-per-client 64 \
+  --test-samples 2000 \
+  --rounds 50 \
+  --updates 150 \
+  --clients-per-round 10 \
+  --local-steps 4 \
+  --batch-size 32 \
+  --model-width 16 \
+  --lr 0.05 \
+  --async-lr 0.02 \
+  --out-dir runs/opt3_cifar_federated_demo_cifar10
+```
 
-1. Add `examples/opt3_cifar_federated_demo.py`.
-2. Use CIFAR-10 split into clients.
-3. Train a small CNN or ResNet-18-style model with FedAvg, AsyncSGD and Async-LocalSGD.
-4. Save accuracy, loss, communication steps, simulated time and staleness plots.
-5. Package the same demo as an A2.Pro stage that writes metrics and plots as artifacts.
-
-This directly targets the distributed-training requirement that mentions CIFAR-10 and ResNet-18. It also gives a cleaner story than synthetic regression.
+This directly targets the distributed-training requirement that mentions CIFAR-10 and ResNet-18-style evaluation. The checked-in smoke run proves the pipeline and artifact generation, not final CIFAR-10 quality.
 
 If we need to show use of other A2.Pro modules, the practical version is:
 

@@ -1,0 +1,35 @@
+[
+  {
+    "optimizer": "AdamW",
+    "train_loss": 4.102319717407227,
+    "val_loss": 4.094440281391144,
+    "tokens_seen": 4608,
+    "steps": 12,
+    "seconds": 0.034275832993444055,
+    "peak_memory_mb": null,
+    "hellaswag_acc_norm": null,
+    "gsm8k_exact_match": null
+  },
+  {
+    "optimizer": "Lion",
+    "train_loss": 4.091457843780518,
+    "val_loss": 4.082236289978027,
+    "tokens_seen": 4608,
+    "steps": 12,
+    "seconds": 0.010103124979650602,
+    "peak_memory_mb": null,
+    "hellaswag_acc_norm": null,
+    "gsm8k_exact_match": null
+  },
+  {
+    "optimizer": "Muon",
+    "train_loss": 4.040924072265625,
+    "val_loss": 4.030831515789032,
+    "tokens_seen": 4608,
+    "steps": 12,
+    "seconds": 0.017631833004998043,
+    "peak_memory_mb": null,
+    "hellaswag_acc_norm": null,
+    "gsm8k_exact_match": null
+  }
+]
