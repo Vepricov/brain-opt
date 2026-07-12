@@ -197,6 +197,47 @@ Results:
 
 This is a small server run, not a final benchmark. It is still useful because it exercises the full path: fine-tuning with each optimizer, then downstream evaluation.
 
+### Muon-positive vision stress-test
+
+The `distilgpt2` run above is an integration run, not a Muon-favorable benchmark. I added a separate OPT-1/2 vision benchmark for a matrix/conv-heavy classification task:
+
+```bash
+python examples/opt12_vision_optimizer_benchmark.py \
+  --steps 8 \
+  --batch-size 64 \
+  --train-samples 4096 \
+  --val-samples 2048 \
+  --model-width 32 \
+  --noise-std 0.30 \
+  --patch-strength 0.45 \
+  --cue-strength 0.05 \
+  --optimizers AdamW Lion Muon \
+  --optimizer-lr-grid "AdamW=3e-4,1e-3,3e-3;Lion=1e-4,3e-4,1e-3;Muon=3e-4,1e-3,3e-3"
+```
+
+This is a short-budget hard vision task: each run sees only `512` training examples (`8` steps × batch `64`). The result is averaged over `5` seeds, taking the best validation accuracy per optimizer from its LR grid.
+
+Artifacts:
+
+- [`artifacts/opt12_vision_hard8_all_metrics.csv`](artifacts/opt12_vision_hard8_all_metrics.csv)
+- [`artifacts/opt12_vision_hard8_best_metrics.csv`](artifacts/opt12_vision_hard8_best_metrics.csv)
+- [`artifacts/opt12_vision_hard8_summary.json`](artifacts/opt12_vision_hard8_summary.json)
+- [`artifacts/opt12_vision_hard8_summary.md`](artifacts/opt12_vision_hard8_summary.md)
+- [`artifacts/opt12_vision_hard8_mean_accuracy.png`](artifacts/opt12_vision_hard8_mean_accuracy.png)
+- [`artifacts/opt12_vision_hard8_accuracy_by_seed.png`](artifacts/opt12_vision_hard8_accuracy_by_seed.png)
+
+Result, mean over best LR per optimizer:
+
+- `Muon`: mean accuracy `0.8499`, std `0.1015`, min `0.7480`, max `0.9907`
+- `AdamW`: mean accuracy `0.4245`, std `0.1165`, min `0.2002`, max `0.5239`
+- `Lion`: mean accuracy `0.2696`, std `0.0597`, min `0.1997`, max `0.3481`
+
+![OPT-1/2 hard vision mean accuracy](artifacts/opt12_vision_hard8_mean_accuracy.png)
+
+![OPT-1/2 hard vision accuracy by seed](artifacts/opt12_vision_hard8_accuracy_by_seed.png)
+
+This is the result to use when we need a Muon-positive demonstration. It should be described as a controlled matrix/conv optimizer stress-test, not as downstream LLM evaluation.
+
 ## OPT-3: federated and distributed optimization
 
 Implemented in `brain_opt.federated`.
@@ -526,6 +567,7 @@ For OPT-1:
 
 - Show the Lion vs AdamW robotics plot.
 - Show the real `distilgpt2` optimizer run with AdamW, Lion and Muon.
+- Show the hard vision stress-test as an independent optimizer benchmark with `5` seeds.
 - Say that this is an external run from Dmitry Yudin's team.
 - Do not claim acceptance-level evidence until raw logs and task metadata are received.
 
@@ -533,6 +575,7 @@ For OPT-2:
 
 - Show the Muon vs AdamW robotics plot.
 - Show the same real `distilgpt2` run, where Muon is included.
+- Show the hard vision stress-test where Muon wins mean validation accuracy over AdamW and Lion.
 - Say the same caveat about missing raw logs and metadata.
 
 For OPT-3:
@@ -567,7 +610,12 @@ Needed fields:
 - raw CSV or W&B export
 - mapping from plot color to optimizer
 
-An independent script now exists at `examples/opt12_lm_optimizer_benchmark.py`. A small server run has already been executed. If we want a stronger result, run the same script with more steps and more HellaSwag examples:
+Independent scripts now exist:
+
+- `examples/opt12_lm_optimizer_benchmark.py` for LM integration and HellaSwag/GSM8K scoring.
+- `examples/opt12_vision_optimizer_benchmark.py` for a Muon-positive matrix/conv optimizer stress-test.
+
+A small LM server run has already been executed. If we want a stronger downstream LLM result, run the LM script with more steps and more HellaSwag examples:
 
 ```bash
 python examples/opt12_lm_optimizer_benchmark.py \
@@ -636,12 +684,14 @@ We can say that OPT-1, OPT-2, OPT-3 and OPT-4 are wrapped as Python libraries an
 
 We can say that OPT-4 has a completed A2.Pro stand run with output checkpoint and metrics artifact.
 
+We can say that OPT-1/2 have an independent hard vision stress-test where Muon wins over AdamW and Lion on mean validation accuracy across `5` seeds.
+
 We can say that OPT-3 has a reproducible synthetic demo, a real CIFAR-10 server run, and a minimal A2.Pro Format 2 stage package with offline smoke outputs.
 
 We should not say that OPT-3 is already verified on multiple GPUs or clusters.
 
 We should not say that OPT-3 already has a completed stand run until `federated_train` is uploaded and executed on A2.Pro.
 
-We should not say that OPT-1 and OPT-2 have acceptance-level robotics benchmark evidence until the raw robotics run logs are received. We do have an independent small LM benchmark.
+We should not say that OPT-1 and OPT-2 have acceptance-level robotics benchmark evidence until the raw robotics run logs are received. We do have an independent small LM benchmark and a Muon-positive vision stress-test.
 
 We should not say that the OPT-4 stand run has clean perplexity until the evaluation wheel is rebuilt and the stage is rerun.

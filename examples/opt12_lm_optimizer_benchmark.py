@@ -13,6 +13,7 @@ slow and not a clean optimizer benchmark by itself.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import math
@@ -31,12 +32,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from brain_opt import get_optimizer
+from brain_opt import get_optimizer, scale_lr
 
 
 @dataclass
 class RunSummary:
     optimizer: str
+    lr: float
+    effective_lr: float
     train_loss: float
     val_loss: float
     tokens_seen: int
@@ -127,6 +130,7 @@ def train_synthetic(args: argparse.Namespace, optimizer_name: str, device: torch
         name=optimizer_name,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        auto_scale_lr=not args.no_auto_scale_lr,
     )
     gen = torch.Generator().manual_seed(args.seed + 2)
     start_time = time.perf_counter()
@@ -150,6 +154,8 @@ def train_synthetic(args: argparse.Namespace, optimizer_name: str, device: torch
     val_loss = evaluate_synthetic(model, val_tokens, args.batch_size, device)
     return RunSummary(
         optimizer=optimizer_name,
+        lr=args.lr,
+        effective_lr=effective_lr(optimizer_name, args),
         train_loss=last_loss,
         val_loss=val_loss,
         tokens_seen=tokens_seen,
@@ -201,6 +207,7 @@ def train_hf(args: argparse.Namespace, optimizer_name: str, device: torch.device
         name=optimizer_name,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        auto_scale_lr=not args.no_auto_scale_lr,
     )
     gen = torch.Generator().manual_seed(args.seed + 2)
     start_time = time.perf_counter()
@@ -224,6 +231,8 @@ def train_hf(args: argparse.Namespace, optimizer_name: str, device: torch.device
     val_loss = evaluate_hf(model, val_tokens, args.batch_size, device)
     summary = RunSummary(
         optimizer=optimizer_name,
+        lr=args.lr,
+        effective_lr=effective_lr(optimizer_name, args),
         train_loss=last_loss,
         val_loss=val_loss,
         tokens_seen=tokens_seen,
@@ -324,8 +333,9 @@ def write_outputs(out_dir: Path, summaries: Sequence[RunSummary]) -> None:
         hs = "" if item.hellaswag_acc_norm is None else f", hellaswag={item.hellaswag_acc_norm:.4f}"
         gsm = "" if item.gsm8k_exact_match is None else f", gsm8k={item.gsm8k_exact_match:.4f}"
         lines.append(
-            f"- `{item.optimizer}`: train_loss={item.train_loss:.4f}, "
-            f"val_loss={item.val_loss:.4f}, seconds={item.seconds:.2f}{hs}{gsm}"
+            f"- `{item.optimizer}` lr={item.lr:g} effective_lr={item.effective_lr:g}: "
+            f"train_loss={item.train_loss:.4f}, val_loss={item.val_loss:.4f}, "
+            f"seconds={item.seconds:.2f}{hs}{gsm}"
         )
     (out_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     maybe_plot(out_dir, summaries)
@@ -369,6 +379,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--seq-len", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--optimizer-lr-grid",
+        default="",
+        help=(
+            "Per-optimizer user-facing LR grid, e.g. "
+            "'AdamW=5e-4,1e-3;Lion=1e-4,3e-4;Muon=1e-3,3e-3,1e-2'. "
+            "Missing optimizers use --lr."
+        ),
+    )
+    parser.add_argument(
+        "--no-auto-scale-lr",
+        action="store_true",
+        help="Forward --lr values directly to optimizers instead of using brain_opt LR scaling.",
+    )
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -382,34 +406,66 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def effective_lr(optimizer_name: str, args: argparse.Namespace) -> float:
+    if args.no_auto_scale_lr:
+        return float(args.lr)
+    return float(scale_lr(optimizer_name, args.lr))
+
+
+def parse_optimizer_lr_grid(spec: str) -> dict[str, list[float]]:
+    if not spec.strip():
+        return {}
+    grid: dict[str, list[float]] = {}
+    for chunk in spec.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise ValueError(f"bad --optimizer-lr-grid chunk: {chunk!r}")
+        name, values = chunk.split("=", 1)
+        lrs = [float(item) for item in values.replace("|", ",").split(",") if item.strip()]
+        if not lrs:
+            raise ValueError(f"empty LR list for optimizer {name!r}")
+        grid[name.strip().lower()] = lrs
+    return grid
+
+
+def lrs_for_optimizer(args: argparse.Namespace, optimizer_name: str) -> list[float]:
+    grid = parse_optimizer_lr_grid(args.optimizer_lr_grid)
+    return grid.get(optimizer_name.lower(), [args.lr])
+
+
 def main() -> None:
     args = parse_args()
     device = torch.device(args.device)
     summaries: List[RunSummary] = []
     for optimizer_name in args.optimizers:
-        if device.type == "cuda":
-            torch.cuda.reset_peak_memory_stats(device)
-        if args.smoke:
-            summary = train_synthetic(args, optimizer_name, device)
-        else:
-            summary, model, tokenizer = train_hf(args, optimizer_name, device)
-            if args.hellaswag_samples > 0:
-                summary.hellaswag_acc_norm = evaluate_hellaswag(
-                    model,
-                    tokenizer,
-                    samples=args.hellaswag_samples,
-                    device=device,
-                )
-            if args.gsm8k_samples > 0:
-                summary.gsm8k_exact_match = evaluate_gsm8k(
-                    model,
-                    tokenizer,
-                    samples=args.gsm8k_samples,
-                    device=device,
-                    max_new_tokens=args.gsm8k_max_new_tokens,
-                )
-        summaries.append(summary)
-        print(summary)
+        for lr in lrs_for_optimizer(args, optimizer_name):
+            run_args = copy.copy(args)
+            run_args.lr = lr
+            if device.type == "cuda":
+                torch.cuda.reset_peak_memory_stats(device)
+            if run_args.smoke:
+                summary = train_synthetic(run_args, optimizer_name, device)
+            else:
+                summary, model, tokenizer = train_hf(run_args, optimizer_name, device)
+                if run_args.hellaswag_samples > 0:
+                    summary.hellaswag_acc_norm = evaluate_hellaswag(
+                        model,
+                        tokenizer,
+                        samples=run_args.hellaswag_samples,
+                        device=device,
+                    )
+                if run_args.gsm8k_samples > 0:
+                    summary.gsm8k_exact_match = evaluate_gsm8k(
+                        model,
+                        tokenizer,
+                        samples=run_args.gsm8k_samples,
+                        device=device,
+                        max_new_tokens=run_args.gsm8k_max_new_tokens,
+                    )
+            summaries.append(summary)
+            print(summary)
     write_outputs(Path(args.out_dir), summaries)
 
 
