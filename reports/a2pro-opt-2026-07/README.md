@@ -26,8 +26,8 @@ The mapping below is based on these documents:
 - `3 Дополнение к ТЗ Безносиков`, point 3.5.2.1: distributed training components target synchronous or asynchronous training on one or more clusters with more than one device.
 - `3 Дополнение к ТЗ Безносиков`, point 3.5.2.6: components must work inside A2.Pro `Оптимизация`.
 - `3 Дополнение к ТЗ Безносиков`, point 3.7.2: tests should include baseline comparison, quality metrics and resource metrics where applicable.
-- `ТЗ 3 Безносиков.pdf`, point 3.2: quantization and pruning methods based on optimization formulations.
-- `ТЗ 3 Безносиков.pdf`, point 3.3: training procedures with quantization.
+- `ТЗ 3 Безносиков.pdf`, work item 3.2 under efficient storage of large models: quantization and pruning methods based on optimization formulations.
+- `ТЗ 3 Безносиков.pdf`, work item 3.3 under efficient storage of large models: training procedures with quantization.
 
 ## Base image integration
 
