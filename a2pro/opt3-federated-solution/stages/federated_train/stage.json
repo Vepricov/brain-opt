@@ -1,12 +1,12 @@
 {
   "version": {
     "major": 1,
-    "minor": 0,
+    "minor": 1,
     "patch": 0,
     "postfix": null
   },
   "image": {
-    "name": "a2pro-opt3-federated:v1.0.0-base-optlibs"
+    "name": "a2pro-opt3-federated:v1.2.0-plibs-2.6.7-a2"
   },
   "entrypoint": "python src/federated_train_main.py",
   "parameters": [

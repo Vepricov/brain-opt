@@ -4,6 +4,9 @@ Format 2 решение для демонстрации ОПТ-1/2 и ОПТ-3 �
 образа. Решение не копирует реализации оптимизаторов внутрь stages: методы
 вызываются из `brain_opt`, который должен быть установлен в БО.
 
+Текущая сборка рассчитана на базовый образ `plibs:jaguar-2.6.7-a2`. В нем
+используется обновленный PlatformAPI с потоковым чтением и записью файлов.
+
 ## Stages
 
 ### `lm_finetune`
@@ -93,7 +96,7 @@ Offline mode создает локальный tiny HF-compatible causal LM chec
 ## Build
 
 ```bash
-docker build -t a2pro-opt3-federated:v1.1.0-base-optlibs .
+docker build -t a2pro-opt3-federated:v1.2.0-plibs-2.6.7-a2 .
 ```
 
 Build падает, если в базовом образе отсутствуют `brain_opt` или `transformers`.

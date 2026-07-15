@@ -6,7 +6,7 @@
     "description": "A2.Pro Format 2 решение для демонстрации ОПТ-1/2 и ОПТ-3 через Python-библиотеку brain_opt из базового образа. LM fine-tune stages читают входной checkpoint из хранилища A2.Pro, дообучают модель и сохраняют новый checkpoint с метриками.",
     "version": {
       "major": 1,
-      "minor": 1,
+      "minor": 2,
       "patch": 0,
       "postfix": null
     },

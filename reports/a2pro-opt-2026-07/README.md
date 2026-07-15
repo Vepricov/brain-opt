@@ -45,7 +45,8 @@
 
 Реализация соответствует требованию о вызове методов оптимизации из базового образа, а не из локально скопированного кода решения.
 
-В базовый образ `plibs:jaguar-a2pro-optlibs` включены:
+Текущий A2.Pro package переведен на базовый образ `plibs:jaguar-2.6.7-a2`.
+В базовый образ включены:
 
 - `brain_opt==0.2.0`
 - `a2_kvant==0.1.0`
@@ -59,6 +60,8 @@ from brain_opt import get_optimizer, run_fedavg, run_async_sgd, run_async_local_
 ```
 
 Тем самым решение A2.Pro содержит PlatformAPI-обвязку и описание стадий, а сами оптимизационные методы поставляются как библиотечные компоненты базового образа.
+
+Для файлов checkpoint используется обновленный PlatformAPI из `plibs:jaguar-2.6.7-a2`: большие файлы читаются и записываются через Stream API, при этом в обвязке сохранен fallback на обычные `read/write`.
 
 Для ОПТ-1/2 и ОПТ-3 подготовлен пакет A2.Pro Format 2: [`a2pro/opt3-federated-solution`](../../a2pro/opt3-federated-solution). Пакет содержит три stage:
 

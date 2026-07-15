@@ -1,5 +1,5 @@
-# Базовый образ платформы: PlatformAPI + brain_opt уже внутри.
-ARG BASE_TAG=jaguar-a2pro-optlibs
+# Базовый образ платформы: PlatformAPI 2.6.7 + библиотечные компоненты оптимизации.
+ARG BASE_TAG=jaguar-2.6.7-a2
 FROM plibs:${BASE_TAG}
 
 WORKDIR /app

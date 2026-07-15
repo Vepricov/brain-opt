@@ -1,8 +1,8 @@
 """Перенос модели между PlatformAPI-чекпоинтом и локальной директорией.
 
-По умолчанию файлы читаются/пишутся через read/write presigned URL.
-Stream API оставлен opt-in, потому что в PlatformAPI 2.0.0.1a0
-checkpoint stream methods в InternalClient ещё не реализованы.
+В PlatformAPI из plibs:jaguar-2.6.7-a2 реализованы потоковое чтение и запись
+файлов, поэтому большие файлы по умолчанию идут через Stream API. Для
+совместимости fallback на read/write остается включенным.
 """
 
 from __future__ import annotations
@@ -16,11 +16,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["download_checkpoint", "upload_directory"]
 
-# PlatformAPI 2.0.0.1a0 exposes stream objects, but checkpoint stream
-# methods are not wired in InternalClient yet. Keep streaming opt-in.
 STREAM_THRESHOLD = 64 * 1024 * 1024  # 64 MiB
 CHUNK = 16 * 1024 * 1024  # 16 MiB
-USE_STREAMS = os.environ.get("QUANT_USE_STREAMS", "").lower() in {"1", "true", "yes"}
+
+
+def _use_streams() -> bool:
+    value = os.environ.get("A2PRO_USE_STREAMS", os.environ.get("QUANT_USE_STREAMS", "1"))
+    return value.lower() not in {"0", "false", "no", "off"}
 
 
 def download_checkpoint(checkpoint: Any, dest: str | Path) -> Path:
@@ -34,8 +36,12 @@ def download_checkpoint(checkpoint: Any, dest: str | Path) -> Path:
         target = dest / key
         target.parent.mkdir(parents=True, exist_ok=True)
         size = _file_size(checkpoint, key)
-        if USE_STREAMS and size is not None and size > STREAM_THRESHOLD:
-            _stream_read_to_file(checkpoint, key, target, size)
+        if _use_streams() and size is not None and size > STREAM_THRESHOLD:
+            try:
+                _stream_read_to_file(checkpoint, key, target, size)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("stream read failed for %s, fallback to read(): %s", key, exc)
+                target.write_bytes(checkpoint.read(key))
         else:
             target.write_bytes(checkpoint.read(key))
         logger.debug("downloaded %s (%s bytes)", key, size)
@@ -51,8 +57,12 @@ def upload_directory(mutable_checkpoint: Any, src: str | Path) -> int:
     for path in files:
         key = str(path.relative_to(src))
         size = path.stat().st_size
-        if USE_STREAMS and size > STREAM_THRESHOLD:
-            _stream_write_file(mutable_checkpoint, key, path)
+        if _use_streams() and size > STREAM_THRESHOLD:
+            try:
+                _stream_write_file(mutable_checkpoint, key, path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("stream write failed for %s, fallback to write(): %s", key, exc)
+                mutable_checkpoint.write(key, file=path.read_bytes())
         else:
             mutable_checkpoint.write(key, file=path.read_bytes())
         logger.debug("uploaded %s (%d bytes)", key, size)
