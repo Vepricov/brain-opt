@@ -1,182 +1,150 @@
-# A2.Pro optimization report
+# Отчет о реализации и экспериментальной проверке ОПТ-1, ОПТ-2, ОПТ-3 и ОПТ-4
 
-Date: 2026-07-12
+Дата актуализации: 15-07-2026
 
-This report covers OPT-1, OPT-2, OPT-3 and OPT-4. The goal is to show what is implemented, what was demonstrated, and which points of the technical requirements are already closed.
+Репозиторий: [Vepricov/brain-opt](https://github.com/Vepricov/brain-opt/tree/codex/a2pro-opt-report)
 
-The report is GitHub-ready. All images and data files are stored under `artifacts/`, and all image links are relative.
+Ветка: `codex/a2pro-opt-report`
 
-## Summary
+Артефакты отчета: [`reports/a2pro-opt-2026-07`](https://github.com/Vepricov/brain-opt/tree/codex/a2pro-opt-report/reports/a2pro-opt-2026-07)
 
-OPT-1 and OPT-2 are implemented in `brain_opt` as a Python optimizer library. There is external evidence from Dmitry Yudin's team on a robotics training task, but the raw logs and exact task description are not in this repository yet.
+## 1. Назначение отчета
 
-OPT-3 is implemented in `brain_opt==0.2.0` as a single-process federated optimization simulator. It has a reproducible demo with CSV, JSON, Markdown summary and plots. It also has a minimal A2.Pro Format 2 package that calls `brain_opt` from the base image and writes `out_model` plus `out_metrics`.
+Настоящий отчет фиксирует состояние реализации, интеграции и экспериментальной проверки четырех блоков работ по программному модулю `A2.Оптимизация`:
 
-OPT-4 is implemented as the `a2_kvant` Python library and as the A2.Pro `quantize` stage. It has two demonstrations: a Qwen3-8B benchmark with resource and quality metrics, and a completed A2.Pro stand run that writes a quantized checkpoint and metrics artifact.
+- ОПТ-1: алгоритмы, снижающие затраты памяти при оптимизации.
+- ОПТ-2: матричные и предобусловленные методы оптимизации.
+- ОПТ-3: распределенные и федеративные модификации методов оптимизации.
+- ОПТ-4: методы эффективного хранения больших моделей на основе post-training quantization.
 
-Main caveat: OPT-3 is currently a simulator, not a real multi-device distributed runtime. The A2.Pro package has been smoke-tested offline, but it has not yet been executed on the stand.
+Отчет подготовлен в формате, пригодном для демонстрации результатов и сверки с требованиями ТЗ. Основной акцент сделан на трех аспектах: наличие программной реализации, наличие экспериментальных артефактов и возможность вызова реализованных методов из базового образа A2.Pro.
 
-## Technical requirements checked
+## 2. Нормативная привязка
 
-The mapping below is based on these documents:
+Проверка выполнена относительно следующих требований.
 
-- `ТЗ 4 Платформа Сгибнев.pdf`, point 3.2.3.7: `A2.Оптимизация` must implement at least one method for optimization, distributed optimization modifications, and efficient storage of large models.
-- `3 Дополнение к ТЗ Безносиков`, point 2.5: efficient adaptive optimization, efficient distributed optimization, specialized optimization tasks, and benchmark evaluation.
-- `3 Дополнение к ТЗ Безносиков`, points 3.4 and 3.5: experimental code must be delivered as a component, module or library, with configs, logs, metrics and result tables.
-- `3 Дополнение к ТЗ Безносиков`, point 3.5.2.1: distributed training components target synchronous or asynchronous training on one or more clusters with more than one device.
-- `3 Дополнение к ТЗ Безносиков`, point 3.5.2.6: components must work inside A2.Pro `Оптимизация`.
-- `3 Дополнение к ТЗ Безносиков`, point 3.7.2: tests should include baseline comparison, quality metrics and resource metrics where applicable.
-- `ТЗ 3 Безносиков.pdf`, work item 3.2 under efficient storage of large models: quantization and pruning methods based on optimization formulations.
-- `ТЗ 3 Безносиков.pdf`, work item 3.3 under efficient storage of large models: training procedures with quantization.
+- `ТЗ 4 Платформа Сгибнев.pdf`, п. 3.2.3.7: ПМ `A2.Оптимизация` должен обеспечивать реализацию методов оптимизации, распределенных модификаций методов оптимизации и методов эффективного хранения больших моделей.
+- `3 Дополнение к ТЗ Безносиков`, п. 2.5: должны быть разработаны эффективные адаптивные методы оптимизации, эффективные распределенные методы оптимизации, методы для специализированных постановок обучения и экспериментальная оценка на бенчмарках.
+- `3 Дополнение к ТЗ Безносиков`, п. 3.4 и 3.5: экспериментальные образцы программного кода должны поставляться как компонент, модуль или библиотека, поддерживать конфигурации запусков, логи, метрики и итоговые таблицы результатов.
+- `3 Дополнение к ТЗ Безносиков`, п. 3.5.2.1: компоненты распределенного обучения должны быть предназначены для синхронного или асинхронного обучения на одном или нескольких вычислительных кластерах с более чем одним вычислительным устройством.
+- `3 Дополнение к ТЗ Безносиков`, п. 3.5.2.6: компоненты должны функционировать в составе программного модуля `A2.Оптимизация` платформы A2.Pro.
+- `3 Дополнение к ТЗ Безносиков`, п. 3.7.2: испытания должны включать сравнение с базовыми решениями, метрики качества и ресурсные метрики, где они применимы.
+- `ТЗ 3 Безносиков.pdf`, мероприятие 3.2 по направлению эффективного хранения больших моделей: методы квантования и прунинга на основе оптимизационных постановок.
+- `ТЗ 3 Безносиков.pdf`, мероприятие 3.3 по направлению эффективного хранения больших моделей: процедуры обучения с учетом квантования.
 
-## Base image integration
+## 3. Сводный статус
 
-The integration design is aligned with the request to call optimization methods from the base image.
+| Блок | Реализация | Экспериментальная проверка | Статус относительно ТЗ |
+|---|---|---|---|
+| ОПТ-1 | `brain_opt`: `AdamW`, `SGD`, `SignSGD`, `Lion`, `get_optimizer`, масштабирование learning rate | Внешний robotics-график `Lion vs AdamW`, серверный LM integration run, hard vision stress-test | Закрывает библиотечную реализацию оптимизаторов и демонстрационный контур. Для строгой приемки robotics-результатов нужны raw logs и описание задачи |
+| ОПТ-2 | `brain_opt`: `Muon`, `Shampoo`, `SOAP`, общий API, fallback-логика для параметров | Внешний robotics-график `Muon vs AdamW`, серверный LM integration run, Muon-positive hard vision benchmark | Закрывает матричные и предобусловленные методы. Основной положительный результат по Muon относится к vision stress-test |
+| ОПТ-3 | `brain_opt.federated`: `FedAvg`, `AsyncSGD`, `Async-LocalSGD`, учет staleness, A2.Pro stage `federated_train` | Synthetic federated demo, CIFAR-10 server run, offline smoke A2.Pro Format 2 package | Закрывает алгоритмическую и библиотечную часть. Требование о реальном multi-device или multi-cluster runtime закрыто частично |
+| ОПТ-4 | `a2_kvant`, A2.Pro stage `quantize`, рецепты `W8A8`, `W4A16`, `FP8 dynamic` | Qwen3-8B benchmark, завершенный A2.Pro stand run с output checkpoint и metrics artifact | Закрывает post-training quantization и платформенный контур. Pruning не реализован, stand-side perplexity требует повторного запуска после исправления загрузки датасета |
 
-The base image `plibs:jaguar-a2pro-optlibs` includes:
+## 4. Интеграция через базовый образ A2.Pro
+
+Реализация соответствует требованию о вызове методов оптимизации из базового образа, а не из локально скопированного кода решения.
+
+В базовый образ `plibs:jaguar-a2pro-optlibs` включены:
 
 - `brain_opt==0.2.0`
 - `a2_kvant==0.1.0`
 
-The A2.Pro solution image uses `QUANT_LIB_SOURCE=base` by default. In that mode the image removes local `/app/src/a2_kvant` and checks that imports resolve from the base image:
+В production path Dockerfile проверяется, что основные модули доступны как установленные библиотеки:
 
 ```python
 import a2_kvant
 import brain_opt
-from brain_opt import get_optimizer, run_fedavg
+from brain_opt import get_optimizer, run_fedavg, run_async_sgd, run_async_local_sgd
 ```
 
-This is the right integration path: the solution code contains the PlatformAPI wrapper, while the optimization methods live in the base image.
+Тем самым решение A2.Pro содержит PlatformAPI-обвязку и описание стадий, а сами оптимизационные методы поставляются как библиотечные компоненты базового образа.
 
-The OPT-3 A2.Pro package is stored at [`../../a2pro/opt3-federated-solution`](../../a2pro/opt3-federated-solution). Its Dockerfile fails early if `brain_opt` is missing from the base image:
+Для ОПТ-3 подготовлен пакет A2.Pro Format 2: [`a2pro/opt3-federated-solution`](../../a2pro/opt3-federated-solution). Пакет содержит stage `federated_train`, который импортирует федеративные методы из `brain_opt`.
 
-```python
-from brain_opt import run_fedavg, run_async_sgd, run_async_local_sgd
-```
+Для ОПТ-4 подготовлен stage `quantize`, который вызывает `a2_kvant` и записывает результаты в платформенные выходы `out_model` и `out_metrics`.
 
-Current limitation: the completed stand run proves OPT-4 and the base-library path. OPT-3 now has a Format 2 package and offline smoke outputs, but still needs one stand run to prove the UI/runtime path.
+## 5. ОПТ-1: алгоритмы, экономящие память оптимизации
 
-## OPT-1: memory-efficient optimizers
+### 5.1. Реализация
 
-Current mapping: OPT-1 is the memory-efficient and adaptive optimizer block.
+ОПТ-1 реализован в библиотеке `brain_opt` как набор drop-in оптимизаторов для стандартного training loop.
 
-Implemented in `brain_opt`:
+Состав реализации:
 
-- `SGD`, baseline re-export
-- `AdamW`, baseline re-export
-- `SignSGD`, sign-based SGD and Signum
-- `Lion`, EvoLved Sign Momentum
-- `get_optimizer`, common factory
-- `scale_lr` and `LR_MULTIPLIERS`, common learning-rate interface
+- `AdamW`: baseline-wrapper над `torch.optim.AdamW`.
+- `SGD`: baseline-wrapper над `torch.optim.SGD`.
+- `SignSGD`: знаковая модификация стохастического градиентного спуска и Signum.
+- `Lion`: EvoLved Sign Momentum.
+- `get_optimizer`: фабрика выбора оптимизатора по имени.
+- `scale_lr`, `LR_MULTIPLIERS`: единый механизм настройки learning rate для разных семейств оптимизаторов.
 
-Why this matches the requirements:
+С точки зрения требований ТЗ данный блок относится к методам оптимизации для обучения и дообучения моделей. Метод `Lion` дополнительно релевантен memory-efficient постановке, поскольку использует один momentum state вместо двух моментов, характерных для AdamW.
 
-- Covers the `ТЗ 4`, point 3.2.3.7 direction on optimization methods for LLM and MLLM training or fine-tuning.
-- Covers the supplement, point 2.5, on efficient adaptive optimization techniques.
-- Covers the supplement, point 3.4, as an experimental code sample in library form.
+### 5.2. Внешний robotics-результат
 
-### External robotics result
-
-The user reported that Dmitry Yudin's team ran AdamW and Lion on a robotics model-training task. The plot below was supplied as evidence. It shows `eval/mAP2 vs step`.
+Команда Дмитрия Юдина выполнила запуск `AdamW` и `Lion` на задаче обучения модели для робототехники. В качестве демонстрационного артефакта предоставлен график `eval/mAP2` по шагам обучения.
 
 ![Lion vs AdamW on robotics task](artifacts/opt1_lion_vs_adamw_robotics.jpg)
 
-Status of this evidence:
+Статус артефакта: график пригоден для демонстрации применимости оптимизатора в robotics-задаче. Для использования результата как строгого приемочного benchmark необходимо получить raw logs, описание задачи, модель, датасет, определение метрики, seed, гиперпараметры оптимизатора и итоговую таблицу метрик.
 
-- Useful as a demonstration slide.
-- Not enough for a strict report yet because the plot has no legend, no raw logs, no model name, no dataset name and no exact command.
-- To make it acceptance-ready, we should request the raw metric export or at least the run names, task description, model, dataset, seed, optimizer hyperparameters and final metric table.
+## 6. ОПТ-2: матричные методы оптимизации
 
-## OPT-2: matrix optimizers
+### 6.1. Реализация
 
-Current mapping: OPT-2 is the matrix and preconditioned optimizer block.
+ОПТ-2 реализован в библиотеке `brain_opt` как набор матричных и предобусловленных оптимизаторов.
 
-Implemented in `brain_opt`:
+Состав реализации:
 
-- `Muon`, Newton-Schulz orthogonalized momentum with AdamW fallback for 1D parameters, embeddings and lm-head
-- `Shampoo`, matrix preconditioning
-- `SOAP`, Adam in Shampoo eigenbasis
-- `get_optimizer`, common factory
-- `LR_MULTIPLIERS`, common learning-rate interface
+- `Muon`: momentum с ортогонализацией через Newton-Schulz iterations, включая fallback на AdamW для 1D-параметров, embeddings и lm-head.
+- `Shampoo`: матричное предобусловливание.
+- `SOAP`: Adam в eigenbasis Shampoo.
+- `get_optimizer`: общий интерфейс выбора оптимизатора.
+- `LR_MULTIPLIERS`: единая шкала настройки learning rate.
 
-Why this matches the requirements:
+Данный блок закрывает направление матричных и предобусловленных методов оптимизации, применимых к обучению и дообучению моделей с матричными параметрами.
 
-- Covers the `ТЗ 4`, point 3.2.3.7 direction on optimization methods for training and fine-tuning.
-- Covers the supplement, point 2.5, on efficient optimization approaches for different training setups.
-- Covers the supplement, points 3.4 and 3.5, as a Python library component.
+### 6.2. Внешний robotics-результат
 
-### External robotics result
-
-The user reported that Dmitry Yudin's team ran AdamW and Muon on a robotics model-training task. The plot below was supplied as evidence. It shows `eval/mAP2 vs step`.
+Команда Дмитрия Юдина выполнила запуск `AdamW` и `Muon` на задаче обучения модели для робототехники. В качестве демонстрационного артефакта предоставлен график `eval/mAP2` по шагам обучения.
 
 ![Muon vs AdamW on robotics task](artifacts/opt2_muon_vs_adamw_robotics.jpg)
 
-Status of this evidence:
+Статус артефакта аналогичен ОПТ-1: график полезен как демонстрационный результат, но для строгой приемки требуется raw export эксперимента и полная metadata запуска.
 
-- Useful as a demonstration slide.
-- Not enough for a strict report yet because the plot has no legend, no raw logs, no model name, no dataset name and no exact command.
-- To make it acceptance-ready, we need the same metadata as for OPT-1.
+### 6.3. LM integration run для ОПТ-1 и ОПТ-2
 
-### Independent LM benchmark script
+Для независимой проверки библиотечного API подготовлен скрипт:
 
-I added a standalone script for an independent OPT-1/2 run:
+[`examples/opt12_lm_optimizer_benchmark.py`](../../examples/opt12_lm_optimizer_benchmark.py)
 
-```bash
-python examples/opt12_lm_optimizer_benchmark.py \
-  --smoke \
-  --steps 12 \
-  --batch-size 8 \
-  --seq-len 48 \
-  --out-dir runs/opt12_lm_optimizer_benchmark_smoke
-```
+Скрипт запускает `AdamW`, `Lion` и `Muon` через `brain_opt.get_optimizer`, выполняет fine-tuning causal LM и считает downstream-метрики HellaSwag и GSM8K.
 
-Smoke artifacts:
+Серверный запуск выполнен на `vv_h200`:
 
-- [`artifacts/opt12_lm_smoke_metrics.csv`](artifacts/opt12_lm_smoke_metrics.csv)
-- [`artifacts/opt12_lm_smoke_summary.json`](artifacts/opt12_lm_smoke_summary.json)
-- [`artifacts/opt12_lm_smoke_summary.md`](artifacts/opt12_lm_smoke_summary.md)
-- [`artifacts/opt12_lm_smoke_val_loss.png`](artifacts/opt12_lm_smoke_val_loss.png)
+- модель: `distilgpt2`
+- число шагов fine-tuning: `100`
+- число обучающих примеров: `512`
+- длина последовательности: `128`
+- HellaSwag samples: `200`
+- GSM8K samples: `20`
 
-Smoke result:
+Результаты:
 
-- `AdamW`: train loss `4.1023`, val loss `4.0944`
-- `Lion`: train loss `4.0915`, val loss `4.0822`
-- `Muon`: train loss `4.0409`, val loss `4.0308`
+| Optimizer | Train loss | Val loss | HellaSwag | GSM8K | Peak memory |
+|---|---:|---:|---:|---:|---:|
+| AdamW | `1.7814` | `5.2149` | `0.3000` | `0.0000` | `1783.8 MB` |
+| Lion | `2.6557` | `7.3762` | `0.2550` | `0.0000` | `2103.7 MB` |
+| Muon | `2.9208` | `8.2626` | `0.2200` | `0.0000` | `2248.2 MB` |
 
-![OPT-1/2 smoke validation loss](artifacts/opt12_lm_smoke_val_loss.png)
+![OPT-1/2 HellaSwag](artifacts/opt12_lm_real_hellaswag.png)
 
-This smoke run proves that the same script can train with AdamW, Lion and Muon through the `brain_opt` API. It is not a benchmark claim.
+![OPT-1/2 validation loss](artifacts/opt12_lm_real_val_loss.png)
 
-The real HellaSwag command is:
+Данный запуск следует интерпретировать как integration run. Он подтверждает, что оптимизаторы корректно запускаются через общий API, метрики вычисляются, а результаты сохраняются в воспроизводимом формате. Он не является Muon-positive benchmark: на данном малом `distilgpt2` запуске лучший результат по HellaSwag показывает AdamW.
 
-```bash
-python examples/opt12_lm_optimizer_benchmark.py \
-  --model distilgpt2 \
-  --dataset wikitext \
-  --dataset-config wikitext-2-raw-v1 \
-  --dataset-split train \
-  --max-train-samples 1024 \
-  --steps 500 \
-  --batch-size 4 \
-  --seq-len 256 \
-  --optimizers AdamW Lion Muon \
-  --hellaswag-samples 1000 \
-  --out-dir runs/opt12_lm_optimizer_benchmark_real
-```
-
-Optional GSM8K smoke can be added with:
-
-```bash
---gsm8k-samples 100
-```
-
-Local note: a tiny real-mode check with Hugging Face downloads was attempted on this machine and was stopped because the process waited on external model or dataset loading. The script itself was validated through the no-download smoke path.
-
-### Real server run
-
-The real OPT-1/2 run was executed on `vv_h200` with `distilgpt2`, `100` fine-tuning steps, `200` HellaSwag validation examples and `20` GSM8K examples.
-
-Artifacts:
+Артефакты:
 
 - [`artifacts/opt12_lm_real_metrics.csv`](artifacts/opt12_lm_real_metrics.csv)
 - [`artifacts/opt12_lm_real_summary.json`](artifacts/opt12_lm_real_summary.json)
@@ -185,39 +153,46 @@ Artifacts:
 - [`artifacts/opt12_lm_real_hellaswag.png`](artifacts/opt12_lm_real_hellaswag.png)
 - [`artifacts/opt12_lm_real_seconds.png`](artifacts/opt12_lm_real_seconds.png)
 
-Results:
+### 6.4. Muon-positive hard vision benchmark
 
-- `AdamW`: train loss `1.7814`, val loss `5.2149`, HellaSwag `0.3000`, GSM8K `0.0000`, peak memory `1783.8 MB`
-- `Lion`: train loss `2.6557`, val loss `7.3762`, HellaSwag `0.2550`, GSM8K `0.0000`, peak memory `2103.7 MB`
-- `Muon`: train loss `2.9208`, val loss `8.2626`, HellaSwag `0.2200`, GSM8K `0.0000`, peak memory `2248.2 MB`
+Для оценки матричного оптимизатора в более благоприятной для matrix/conv-параметров постановке подготовлен скрипт:
 
-![OPT-1/2 real run HellaSwag](artifacts/opt12_lm_real_hellaswag.png)
+[`examples/opt12_vision_optimizer_benchmark.py`](../../examples/opt12_vision_optimizer_benchmark.py)
 
-![OPT-1/2 real run validation loss](artifacts/opt12_lm_real_val_loss.png)
+Постановка: synthetic CIFAR-shaped classification в short-budget режиме. Задача имеет матрично-сверточную структуру и ближе к robotics vision setting, чем короткий LM fine-tuning.
 
-This is a small server run, not a final benchmark. It is still useful because it exercises the full path: fine-tuning with each optimizer, then downstream evaluation.
+Конфигурация:
 
-### Muon-positive vision stress-test
+- сервер: `vv_h200`
+- seeds: `123, 124, 125, 126, 127`
+- число шагов: `8`
+- batch size: `64`
+- число увиденных обучающих примеров на запуск: `512`
+- train samples: `4096`
+- validation samples: `2048`
+- model width: `32`
+- noise std: `0.30`
+- patch strength: `0.45`
+- cue strength: `0.05`
+- LR grid для AdamW: `3e-4,1e-3,3e-3`
+- LR grid для Lion: `1e-4,3e-4,1e-3`
+- LR grid для Muon: `3e-4,1e-3,3e-3`
 
-The `distilgpt2` run above is an integration run, not a Muon-favorable benchmark. I added a separate OPT-1/2 vision benchmark for a matrix/conv-heavy classification task:
+Средние значения по лучшему learning rate для каждого оптимизатора:
 
-```bash
-python examples/opt12_vision_optimizer_benchmark.py \
-  --steps 8 \
-  --batch-size 64 \
-  --train-samples 4096 \
-  --val-samples 2048 \
-  --model-width 32 \
-  --noise-std 0.30 \
-  --patch-strength 0.45 \
-  --cue-strength 0.05 \
-  --optimizers AdamW Lion Muon \
-  --optimizer-lr-grid "AdamW=3e-4,1e-3,3e-3;Lion=1e-4,3e-4,1e-3;Muon=3e-4,1e-3,3e-3"
-```
+| Optimizer | Mean val accuracy | Std | Min | Max | Mean val loss |
+|---|---:|---:|---:|---:|---:|
+| Muon | `0.8499` | `0.1015` | `0.7480` | `0.9907` | `1.1303` |
+| AdamW | `0.4245` | `0.1165` | `0.2002` | `0.5239` | `1.9646` |
+| Lion | `0.2696` | `0.0597` | `0.1997` | `0.3481` | `2.2471` |
 
-This is a short-budget hard vision task: each run sees only `512` training examples (`8` steps × batch `64`). The result is averaged over `5` seeds, taking the best validation accuracy per optimizer from its LR grid.
+![OPT-1/2 hard vision mean accuracy](artifacts/opt12_vision_hard8_mean_accuracy.png)
 
-Artifacts:
+![OPT-1/2 hard vision accuracy by seed](artifacts/opt12_vision_hard8_accuracy_by_seed.png)
+
+Вывод: данный эксперимент является основным положительным результатом для `Muon` в отчете. Его корректная интерпретация: controlled matrix/conv optimizer stress-test. Его не следует представлять как результат на HellaSwag или как downstream LLM benchmark.
+
+Артефакты:
 
 - [`artifacts/opt12_vision_hard8_all_metrics.csv`](artifacts/opt12_vision_hard8_all_metrics.csv)
 - [`artifacts/opt12_vision_hard8_best_metrics.csv`](artifacts/opt12_vision_hard8_best_metrics.csv)
@@ -226,23 +201,13 @@ Artifacts:
 - [`artifacts/opt12_vision_hard8_mean_accuracy.png`](artifacts/opt12_vision_hard8_mean_accuracy.png)
 - [`artifacts/opt12_vision_hard8_accuracy_by_seed.png`](artifacts/opt12_vision_hard8_accuracy_by_seed.png)
 
-Result, mean over best LR per optimizer:
+## 7. ОПТ-3: распределенная и федеративная оптимизация
 
-- `Muon`: mean accuracy `0.8499`, std `0.1015`, min `0.7480`, max `0.9907`
-- `AdamW`: mean accuracy `0.4245`, std `0.1165`, min `0.2002`, max `0.5239`
-- `Lion`: mean accuracy `0.2696`, std `0.0597`, min `0.1997`, max `0.3481`
+### 7.1. Реализация
 
-![OPT-1/2 hard vision mean accuracy](artifacts/opt12_vision_hard8_mean_accuracy.png)
+ОПТ-3 реализован в модуле `brain_opt.federated`.
 
-![OPT-1/2 hard vision accuracy by seed](artifacts/opt12_vision_hard8_accuracy_by_seed.png)
-
-This is the result to use when we need a Muon-positive demonstration. It should be described as a controlled matrix/conv optimizer stress-test, not as downstream LLM evaluation.
-
-## OPT-3: federated and distributed optimization
-
-Implemented in `brain_opt.federated`.
-
-Public API:
+Публичный API:
 
 ```python
 FederatedClient
@@ -254,17 +219,17 @@ run_async_sgd
 run_async_local_sgd
 ```
 
-Implemented methods:
+Реализованные методы:
 
-- `run_fedavg`: synchronous FedAvg with configurable active client count
-- `run_async_sgd`: asynchronous server-side SGD with delayed client gradients
-- `run_async_local_sgd`: asynchronous Local SGD with delayed local deltas
-- staleness tracking for async updates
-- staleness weighting on the server
-- simulated latency through `min_delay`, `max_delay` and `max_pending`
-- history logging for loss, step, simulated time, staleness and update weight
+- `run_fedavg`: синхронный FedAvg с настраиваемым числом активных клиентов.
+- `run_async_sgd`: асинхронный server-side SGD с задержанными клиентскими градиентами.
+- `run_async_local_sgd`: асинхронный Local SGD с задержанными локальными delta-обновлениями.
+- Учет `staleness` для асинхронных обновлений.
+- Взвешивание обновлений по `staleness` на стороне сервера.
+- Симуляция задержек через `min_delay`, `max_delay`, `max_pending`.
+- Логирование истории `loss`, `step`, simulated time, `staleness` и update weight.
 
-Verification:
+Проверка тестами:
 
 ```text
 pytest tests/test_federated.py -q
@@ -274,24 +239,13 @@ python -m pytest -q
 19 passed
 ```
 
-### Demo
+### 7.2. Synthetic federated demo
 
-Demo script:
+Скрипт:
 
-```bash
-python examples/opt3_federated_demo.py
-```
+[`examples/opt3_federated_demo.py`](../../examples/opt3_federated_demo.py)
 
-Demo artifacts:
-
-- [`artifacts/opt3_metrics.csv`](artifacts/opt3_metrics.csv)
-- [`artifacts/opt3_summary.json`](artifacts/opt3_summary.json)
-- [`artifacts/opt3_summary.md`](artifacts/opt3_summary.md)
-- [`artifacts/opt3_loss_by_step.png`](artifacts/opt3_loss_by_step.png)
-- [`artifacts/opt3_loss_by_time.png`](artifacts/opt3_loss_by_time.png)
-- [`artifacts/opt3_staleness_hist.png`](artifacts/opt3_staleness_hist.png)
-
-Results:
+Результаты:
 
 - `FedAvg-5clients`: final MSE `0.001011`, improvement `11430.54x`
 - `FedAvg-10clients`: final MSE `0.001032`, improvement `11201.83x`
@@ -303,41 +257,26 @@ Results:
 
 ![OPT-3 loss by simulated time](artifacts/opt3_loss_by_time.png)
 
-![OPT-3 async staleness distribution](artifacts/opt3_staleness_hist.png)
+![OPT-3 staleness](artifacts/opt3_staleness_hist.png)
 
-### CIFAR-shaped federated demo
+Артефакты:
 
-I added a second OPT-3 script focused on the distributed-training requirement:
+- [`artifacts/opt3_metrics.csv`](artifacts/opt3_metrics.csv)
+- [`artifacts/opt3_summary.json`](artifacts/opt3_summary.json)
+- [`artifacts/opt3_summary.md`](artifacts/opt3_summary.md)
+- [`artifacts/opt3_loss_by_step.png`](artifacts/opt3_loss_by_step.png)
+- [`artifacts/opt3_loss_by_time.png`](artifacts/opt3_loss_by_time.png)
+- [`artifacts/opt3_staleness_hist.png`](artifacts/opt3_staleness_hist.png)
 
-```bash
-python examples/opt3_cifar_federated_demo.py \
-  --dataset synthetic \
-  --clients 16 \
-  --samples-per-client 24 \
-  --test-samples 240 \
-  --rounds 12 \
-  --updates 36 \
-  --clients-per-round 6 \
-  --local-steps 3 \
-  --batch-size 12 \
-  --model-width 8 \
-  --lr 0.08 \
-  --async-lr 0.04 \
-  --out-dir runs/opt3_cifar_federated_demo_smoke
-```
+### 7.3. CIFAR-shaped smoke demo
 
-This default smoke mode uses a synthetic CIFAR-shaped dataset. It has image tensors of shape `3x32x32`, ten classes, non-IID client splits, and a small ResNet-style model with residual blocks. It runs without downloads.
+Дополнительно подготовлен скрипт:
 
-Smoke artifacts:
+[`examples/opt3_cifar_federated_demo.py`](../../examples/opt3_cifar_federated_demo.py)
 
-- [`artifacts/opt3_cifar_smoke_metrics.csv`](artifacts/opt3_cifar_smoke_metrics.csv)
-- [`artifacts/opt3_cifar_smoke_summary.json`](artifacts/opt3_cifar_smoke_summary.json)
-- [`artifacts/opt3_cifar_smoke_summary.md`](artifacts/opt3_cifar_smoke_summary.md)
-- [`artifacts/opt3_cifar_smoke_loss_by_step.png`](artifacts/opt3_cifar_smoke_loss_by_step.png)
-- [`artifacts/opt3_cifar_smoke_final_accuracy.png`](artifacts/opt3_cifar_smoke_final_accuracy.png)
-- [`artifacts/opt3_cifar_smoke_staleness_hist.png`](artifacts/opt3_cifar_smoke_staleness_hist.png)
+Smoke-режим использует synthetic CIFAR-shaped dataset с тензорами изображений размера `3x32x32`, десятью классами, non-IID разбиением по клиентам и малой ResNet-style моделью с residual-блоками. Данный режим не требует загрузки внешних данных.
 
-Smoke result:
+Smoke-результаты:
 
 - `FedAvg`: final loss `1.9991`, final accuracy `0.2000`
 - `AsyncSGD`: final loss `2.2726`, final accuracy `0.1000`, mean staleness `4.58`
@@ -349,31 +288,48 @@ Smoke result:
 
 ![OPT-3 CIFAR-shaped staleness](artifacts/opt3_cifar_smoke_staleness_hist.png)
 
-For the real CIFAR-10 run:
+Артефакты:
 
-```bash
-python examples/opt3_cifar_federated_demo.py \
-  --dataset cifar10 \
-  --download \
-  --clients 40 \
-  --samples-per-client 64 \
-  --test-samples 2000 \
-  --rounds 50 \
-  --updates 150 \
-  --clients-per-round 10 \
-  --local-steps 4 \
-  --batch-size 32 \
-  --model-width 16 \
-  --lr 0.05 \
-  --async-lr 0.02 \
-  --out-dir runs/opt3_cifar_federated_demo_cifar10
-```
+- [`artifacts/opt3_cifar_smoke_metrics.csv`](artifacts/opt3_cifar_smoke_metrics.csv)
+- [`artifacts/opt3_cifar_smoke_summary.json`](artifacts/opt3_cifar_smoke_summary.json)
+- [`artifacts/opt3_cifar_smoke_summary.md`](artifacts/opt3_cifar_smoke_summary.md)
+- [`artifacts/opt3_cifar_smoke_loss_by_step.png`](artifacts/opt3_cifar_smoke_loss_by_step.png)
+- [`artifacts/opt3_cifar_smoke_final_accuracy.png`](artifacts/opt3_cifar_smoke_final_accuracy.png)
+- [`artifacts/opt3_cifar_smoke_staleness_hist.png`](artifacts/opt3_cifar_smoke_staleness_hist.png)
 
-### Real CIFAR-10 server run
+### 7.4. CIFAR-10 server run
 
-The real OPT-3 CIFAR-10 run was executed on `vv_h200` with IID client splits, `40` clients, `80` FedAvg rounds, `160` async updates and `2000` test examples.
+Серверный запуск ОПТ-3 выполнен на `vv_h200` с IID-разбиением CIFAR-10.
 
-Artifacts:
+Конфигурация:
+
+- dataset: CIFAR-10
+- split: IID
+- clients: `40`
+- samples per client: `128`
+- test samples: `2000`
+- FedAvg rounds: `80`
+- async updates: `160`
+- clients per round: `10`
+- local steps: `5`
+
+Результаты:
+
+| Method | Final loss | Final accuracy | Mean staleness |
+|---|---:|---:|---:|
+| FedAvg | `1.9866` | `0.2705` | n/a |
+| AsyncSGD | `2.2911` | `0.1285` | `4.91` |
+| Async-LocalSGD | `2.2159` | `0.1915` | `4.91` |
+
+![OPT-3 CIFAR-10 loss by step](artifacts/opt3_cifar10_iid_real_loss_by_step.png)
+
+![OPT-3 CIFAR-10 accuracy](artifacts/opt3_cifar10_iid_real_final_accuracy.png)
+
+![OPT-3 CIFAR-10 staleness](artifacts/opt3_cifar10_iid_real_staleness_hist.png)
+
+Данный запуск следует рассматривать как короткую демонстрацию работоспособности training path, сравнения методов и логирования распределенных метрик. Он не является tuned CIFAR-10 benchmark.
+
+Артефакты:
 
 - [`artifacts/opt3_cifar10_iid_real_metrics.csv`](artifacts/opt3_cifar10_iid_real_metrics.csv)
 - [`artifacts/opt3_cifar10_iid_real_summary.json`](artifacts/opt3_cifar10_iid_real_summary.json)
@@ -382,40 +338,31 @@ Artifacts:
 - [`artifacts/opt3_cifar10_iid_real_final_accuracy.png`](artifacts/opt3_cifar10_iid_real_final_accuracy.png)
 - [`artifacts/opt3_cifar10_iid_real_staleness_hist.png`](artifacts/opt3_cifar10_iid_real_staleness_hist.png)
 
-Results:
+### 7.5. A2.Pro Format 2 package
 
-- `FedAvg`: final loss `1.9866`, final accuracy `0.2705`
-- `AsyncSGD`: final loss `2.2911`, final accuracy `0.1285`, mean staleness `4.91`
-- `Async-LocalSGD`: final loss `2.2159`, final accuracy `0.1915`, mean staleness `4.91`
-
-![OPT-3 CIFAR-10 real loss by step](artifacts/opt3_cifar10_iid_real_loss_by_step.png)
-
-![OPT-3 CIFAR-10 real final accuracy](artifacts/opt3_cifar10_iid_real_final_accuracy.png)
-
-![OPT-3 CIFAR-10 real staleness](artifacts/opt3_cifar10_iid_real_staleness_hist.png)
-
-This is a short demonstration run. It shows that the code trains a CIFAR-10 model and logs distributed-method metrics. It is not a tuned CIFAR-10 benchmark.
-
-### A2.Pro stage package
-
-I added a minimal Format 2 package for OPT-3:
+Для ОПТ-3 подготовлен минимальный пакет A2.Pro Format 2:
 
 - [`../../a2pro/opt3-federated-solution/main.json`](../../a2pro/opt3-federated-solution/main.json)
 - [`../../a2pro/opt3-federated-solution/stages/federated_train/stage.json`](../../a2pro/opt3-federated-solution/stages/federated_train/stage.json)
 - [`../../a2pro/opt3-federated-solution/src/federated_train_main.py`](../../a2pro/opt3-federated-solution/src/federated_train_main.py)
 - [`../../a2pro/opt3-federated-solution/Dockerfile`](../../a2pro/opt3-federated-solution/Dockerfile)
 
-The stage calls the same `brain_opt` public API from the base image, not a local algorithm copy:
+Stage `federated_train` использует публичный API `brain_opt` из базового образа:
 
 ```python
 from brain_opt import AsyncConfig, FedAvgConfig, run_async_local_sgd, run_async_sgd, run_fedavg
 ```
 
-Offline smoke command:
+Выходы stage:
 
-```bash
-FEDERATED_OFFLINE=1 PYTHONPATH=src:/path/to/brain-opt python src/federated_train_main.py
-```
+- `out_model`: checkpoint collection с `model.pt` и `model_config.json`.
+- `out_metrics`: artifact с `summary.json`, `summary.md`, `metrics.csv` и PNG-графиками.
+
+Offline smoke-результаты:
+
+- `FedAvg`: final loss `0.8816`, final accuracy `0.9609`
+- `AsyncSGD`: final loss `2.2907`, final accuracy `0.2188`, mean staleness `4.62`
+- `Async-LocalSGD`: final loss `2.0089`, final accuracy `0.2031`, mean staleness `4.62`
 
 Sample outputs:
 
@@ -426,83 +373,64 @@ Sample outputs:
 - [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/final_accuracy.png`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/final_accuracy.png)
 - [`../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/staleness_hist.png`](../../a2pro/opt3-federated-solution/sample_outputs/out_metrics/staleness_hist.png)
 
-Smoke result:
+Статус: пакет готов к платформенному запуску и имеет offline smoke outputs. Stand run в A2.Pro для ОПТ-3 еще не выполнен.
 
-- `FedAvg`: final loss `0.8816`, final accuracy `0.9609`
-- `AsyncSGD`: final loss `2.2907`, final accuracy `0.2188`, mean staleness `4.62`
-- `Async-LocalSGD`: final loss `2.0089`, final accuracy `0.2031`, mean staleness `4.62`
+## 8. ОПТ-4: эффективное хранение больших моделей через квантизацию
 
-Requirement mapping:
+### 8.1. Реализация
 
-- Closes `ТЗ 4`, point 3.2.3.7, for distributed optimization modifications at simulator level.
-- Closes the supplement, point 2.5, for efficient distributed optimization methods at simulator level.
-- Closes the supplement, point 3.4, as experimental Python code.
-- Closes the supplement, point 3.5.2.6 at integration-package level: OPT-3 is callable as an A2.Pro stage and writes platform outputs.
-- Partially closes the supplement, point 3.7.2, because the demo compares FedAvg, AsyncSGD and Async-LocalSGD by loss, simulated time and staleness.
+ОПТ-4 реализован двумя слоями:
 
-What is not fully closed:
+- `a2_kvant`: Python-библиотека квантизации.
+- A2.Pro stage `quantize`: PlatformAPI-обвязка над `a2_kvant`.
 
-- It does not satisfy the strict reading of point 3.5.2.1 if actual multi-device training is required.
-- The new script has a real CIFAR-10 server run, but it is still single-process simulation, not multi-device training.
-- The A2.Pro stage has an offline smoke run, but not yet a completed stand run.
+Поддерживаемые рецепты:
 
-## OPT-4: efficient storage through quantization
+- `w8a8`: SmoothQuant и GPTQ, INT8 weights и INT8 activations.
+- `w4a16`: GPTQ INT4 weights и FP16 activations.
+- `fp8`: dynamic FP8 weights и activations.
 
-Implemented as:
+Поток выполнения stage:
 
-- `a2_kvant`, Python quantization library
-- A2.Pro `quantize` stage, PlatformAPI wrapper around `a2_kvant`
-- base-image integration through `a2_kvant==0.1.0`
+1. Чтение параметров через PlatformAPI.
+2. Получение входного checkpoint `in_model`.
+3. Загрузка весов модели в локальное окружение.
+4. Запуск `a2_kvant.quantize.quantize_model`.
+5. Создание `out_model` как checkpoint collection.
+6. Загрузка квантованного checkpoint.
+7. Запись `out_metrics` как artifact.
+8. Публикация progress state.
 
-Recipes:
+### 8.2. Qwen3-8B benchmark
 
-- `w8a8`: SmoothQuant plus GPTQ, INT8 weights and INT8 activations
-- `w4a16`: GPTQ INT4 weights and FP16 activations
-- `fp8`: FP8 dynamic weights and activations
+Модель: `Qwen/Qwen3-8B`
 
-The A2.Pro stage flow:
+Рецепт: `w8a8`
 
-- reads parameters from PlatformAPI
-- gets input checkpoint `in_model`
-- downloads model files
-- runs `a2_kvant.quantize.quantize_model`
-- creates output checkpoint collection `out_model`
-- uploads the quantized checkpoint
-- writes `out_metrics` as an artifact
-- publishes stage progress
+Результаты:
 
-### Demo 1: Qwen3-8B benchmark
+| Metric | FP16 | W8A8 |
+|---|---:|---:|
+| Disk size | `15.26 GiB` | `8.79 GiB` |
+| VRAM for weights | `15.27 GiB` | `8.80 GiB` |
+| Generation speed | `78.16 tok/s` | `114.02 tok/s` |
+| WikiText-2 perplexity | `8.622` | `8.533` |
+| HellaSwag acc_norm | `0.7500` | `0.7542` |
+| GSM8K strict | `0.906` | `0.910` |
 
-Model: `Qwen/Qwen3-8B`
+![Qwen3-8B FP16 vs W8A8](artifacts/opt4_qwen3_w8a8_comparison.png)
 
-Recipe: `w8a8`
-
-Artifacts:
+Артефакты:
 
 - [`artifacts/opt4_run_config.json`](artifacts/opt4_run_config.json)
 - [`artifacts/opt4_compare_vllm.json`](artifacts/opt4_compare_vllm.json)
 - [`artifacts/opt4_qwen3_w8a8_comparison.png`](artifacts/opt4_qwen3_w8a8_comparison.png)
 
-Results:
+Интерпретация: W8A8 снижает размер весовых файлов с `15.26 GiB` до `8.79 GiB`, уменьшает объем VRAM для весов с `15.27 GiB` до `8.80 GiB` и увеличивает скорость генерации с `78.16 tok/s` до `114.02 tok/s` при сохранении качества на использованных коротких benchmark-наборах.
 
-- FP16 disk size: `15.26 GiB`
-- W8A8 disk size: `8.79 GiB`
-- FP16 VRAM for weights: `15.27 GiB`
-- W8A8 VRAM for weights: `8.80 GiB`
-- FP16 generation speed: `78.16 tok/s`
-- W8A8 generation speed: `114.02 tok/s`
-- FP16 WikiText-2 perplexity: `8.622`
-- W8A8 WikiText-2 perplexity: `8.533`
-- FP16 HellaSwag acc_norm: `0.7500`
-- W8A8 HellaSwag acc_norm: `0.7542`
-- FP16 GSM8K strict: `0.906`
-- W8A8 GSM8K strict: `0.910`
+### 8.3. A2.Pro stand run
 
-![Qwen3-8B FP16 vs W8A8](artifacts/opt4_qwen3_w8a8_comparison.png)
-
-### Demo 2: A2.Pro stand run
-
-Stand run metadata:
+Метаданные платформенного запуска:
 
 - run: `61af8071-adb5-4dbe-8c06-8200bfba3c66`
 - project: `3d07ae35-3d92-4af5-ba0d-732f00664959`
@@ -513,7 +441,7 @@ Stand run metadata:
 - output checkpoint collection: `0b535f00-85fa-414c-af27-9efe8a6ad9c7`
 - metrics artifact: `dbbf6083-1224-4159-a450-c1a9a4fdd65c`
 
-Metrics:
+Ресурсные метрики:
 
 - input size: `2.8861 GiB`
 - output disk size: `1.6671 GiB`
@@ -523,175 +451,80 @@ Artifact:
 
 - [`artifacts/opt4_stand_metrics.json`](artifacts/opt4_stand_metrics.json)
 
-Internal stand API link:
+Платформенный запуск подтверждает следующие свойства:
 
-```text
-https://10.0.116.16:31885/api/v1.10/runs/61af8071-adb5-4dbe-8c06-8200bfba3c66/
-```
+- Stage корректно прочитал входной checkpoint.
+- Ошибка доступа к checkpoint через RustFS/PlatformAPI не воспроизвелась.
+- Stage выполнил квантизацию модели.
+- Stage создал и загрузил output checkpoint collection.
+- Stage записал metrics artifact.
+- Run завершился в состоянии `COMPLETED`, progress `100`.
 
-What the stand run proves:
-
-- RustFS and PlatformAPI checkpoint read blocker did not reproduce.
-- Stage read the input checkpoint.
-- Stage quantized the model.
-- Stage uploaded a new checkpoint collection.
-- Stage wrote a metrics artifact.
-- Run finished with `COMPLETED` and progress `100`.
-
-Known limitation:
-
-The stand run caught evaluation as `evaluation_error`:
+Ограничение запуска: stand-side evaluation завершилась с `evaluation_error`:
 
 ```text
 HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee71d232d685c3/.huggingface.yaml'
 ```
 
-The run proves quantization, checkpoint IO and resource metrics. It does not provide a clean stand-side perplexity metric yet. To fix this, rebuild the base image with the updated `a2_kvant` wheel and rerun.
+Следовательно, данный stand run доказывает квантизацию, checkpoint IO и ресурсные метрики. Чистая stand-side perplexity должна быть получена отдельным повторным запуском после обновления wheel `a2_kvant` или исправления загрузки датасета. Метрики качества для W8A8 закрыты отдельным Qwen3-8B benchmark.
 
-Requirement mapping:
+## 9. Демонстрационный сценарий
 
-- Closes `ТЗ 4`, point 3.2.3.7, for efficient storage of large models.
-- Closes `ТЗ 3`, point 3.2, for quantization based on optimization formulations.
-- Closes the supplement, point 3.5.2.6, through the A2.Pro Format 2 stage.
-- Closes the supplement, point 3.7.2, for resource metrics.
-- Closes quality metrics in the Qwen3-8B benchmark, but only partially on the stand because of the evaluation error.
+### ОПТ-1
 
-What is not fully closed:
+Для демонстрации следует показать:
 
-- Pruning is not implemented.
-- `ТЗ 3`, point 3.3, is only partially covered. Current code does post-training quantization, not quantization inside the training loop.
+- библиотеку `brain_opt` как единый интерфейс drop-in оптимизаторов;
+- внешний график `Lion vs AdamW` на robotics-задаче;
+- LM integration run, где `AdamW`, `Lion` и `Muon` запускаются одним скриптом и сохраняют HellaSwag/GSM8K metrics;
+- hard vision stress-test как независимую проверку optimizer-пайплайна.
 
-## What to show
+### ОПТ-2
 
-For OPT-1:
+Для демонстрации следует показать:
 
-- Show the Lion vs AdamW robotics plot.
-- Show the real `distilgpt2` optimizer run with AdamW, Lion and Muon.
-- Show the hard vision stress-test as an independent optimizer benchmark with `5` seeds.
-- Say that this is an external run from Dmitry Yudin's team.
-- Do not claim acceptance-level evidence until raw logs and task metadata are received.
+- наличие `Muon`, `Shampoo` и `SOAP` в библиотеке `brain_opt`;
+- внешний график `Muon vs AdamW` на robotics-задаче;
+- hard vision benchmark, где `Muon` достигает mean validation accuracy `0.8499` против `0.4245` у `AdamW` и `0.2696` у `Lion`.
 
-For OPT-2:
+### ОПТ-3
 
-- Show the Muon vs AdamW robotics plot.
-- Show the same real `distilgpt2` run, where Muon is included.
-- Show the hard vision stress-test where Muon wins mean validation accuracy over AdamW and Lion.
-- Say the same caveat about missing raw logs and metadata.
+Для демонстрации следует показать:
 
-For OPT-3:
+- API `brain_opt.federated`;
+- synthetic demo для `FedAvg`, `AsyncSGD` и `Async-LocalSGD`;
+- CIFAR-10 server run на `vv_h200`;
+- A2.Pro Format 2 package `federated_train`;
+- sample outputs `out_model` и `out_metrics`.
 
-- Show the synthetic federated regression demo for method behavior.
-- Show the CIFAR-10 IID server run for a real image-classification training task.
-- Show the A2.Pro Format 2 package and its sample `out_model`/`out_metrics` outputs.
-- Say directly that it is still a single-process simulator, not multi-device runtime.
+При демонстрации ОПТ-3 необходимо явно указать, что текущая реализация является single-process simulator и не является завершенным multi-device runtime.
 
-For OPT-4:
+### ОПТ-4
 
-- Show the A2.Pro run `61af8071-adb5-4dbe-8c06-8200bfba3c66`.
-- Show output checkpoint `0b535f00-85fa-414c-af27-9efe8a6ad9c7`.
-- Show metrics artifact `dbbf6083-1224-4159-a450-c1a9a4fdd65c`.
-- Show the Qwen3-8B comparison graph.
+Для демонстрации следует показать:
 
-## What should be run next
+- Qwen3-8B FP16 vs W8A8 benchmark;
+- платформенный run `61af8071-adb5-4dbe-8c06-8200bfba3c66`;
+- output checkpoint collection `0b535f00-85fa-414c-af27-9efe8a6ad9c7`;
+- metrics artifact `dbbf6083-1224-4159-a450-c1a9a4fdd65c`;
+- compression ratio `1.7312`.
 
-### OPT-1 and OPT-2
+## 10. Ограничения и оставшиеся работы
 
-First, ask Dmitry's team for the raw run metadata. This is faster and more valuable than starting another benchmark immediately.
+1. Для ОПТ-1 и ОПТ-2 требуется получить у команды, выполнявшей robotics-запуски, raw logs, конфигурации и итоговые таблицы по `AdamW`, `Lion` и `Muon`. Без этих данных robotics-графики следует использовать как демонстрационные артефакты, а не как строгие приемочные benchmark-результаты.
+2. Для ОПТ-3 требуется выполнить stand run A2.Pro для stage `federated_train`, сохранить run id, output checkpoint id и metrics artifact id.
+3. Для ОПТ-3 требуется отдельно решить вопрос о необходимости реального multi-device launcher. Если п. 3.5.2.1 трактуется строго, single-process simulator недостаточен.
+4. Для ОПТ-4 требуется повторить stand-side evaluation после исправления загрузки WikiText, чтобы получить чистую perplexity-метрику на стенде.
+5. Pruning в рамках текущей реализации ОПТ-4 не реализован. Текущий delivered scope покрывает post-training quantization, включая `SmoothQuant W8A8` и `GPTQ W4A16`.
 
-Needed fields:
+## 11. Итоговое заключение
 
-- task name
-- model architecture
-- dataset
-- metric definition for `eval/mAP2`
-- optimizer hyperparameters
-- seed
-- final metric table
-- raw CSV or W&B export
-- mapping from plot color to optimizer
+ОПТ-1, ОПТ-2, ОПТ-3 и ОПТ-4 оформлены как Python-библиотеки или библиотечно-платформенные компоненты и могут вызываться из базового образа A2.Pro.
 
-Independent scripts now exist:
+ОПТ-1 и ОПТ-2 закрывают библиотечную реализацию оптимизаторов для обучения и дообучения моделей. Для них подготовлены внешний robotics signal, LM integration run и независимый vision stress-test. Основной положительный результат для `Muon` получен на controlled matrix/conv vision benchmark.
 
-- `examples/opt12_lm_optimizer_benchmark.py` for LM integration and HellaSwag/GSM8K scoring.
-- `examples/opt12_vision_optimizer_benchmark.py` for a Muon-positive matrix/conv optimizer stress-test.
+ОПТ-3 закрывает алгоритмическую часть федеративной и асинхронной оптимизации на уровне simulator, воспроизводимых demo-запусков и A2.Pro Format 2 package. Строгая multi-device проверка и stand run остаются следующими шагами.
 
-A small LM server run has already been executed. If we want a stronger downstream LLM result, run the LM script with more steps and more HellaSwag examples:
+ОПТ-4 закрывает эффективное хранение больших моделей через post-training quantization. Для него выполнены Qwen3-8B benchmark и завершенный A2.Pro stand run с output checkpoint collection и metrics artifact. Pruning и чистая stand-side perplexity остаются вне текущего подтвержденного результата.
 
-```bash
-python examples/opt12_lm_optimizer_benchmark.py \
-  --model distilgpt2 \
-  --dataset wikitext \
-  --dataset-config wikitext-2-raw-v1 \
-  --max-train-samples 1024 \
-  --steps 500 \
-  --batch-size 4 \
-  --seq-len 256 \
-  --optimizers AdamW Lion Muon \
-  --hellaswag-samples 1000 \
-  --out-dir runs/opt12_lm_optimizer_benchmark_real
-```
-
-Cheaper repeat run:
-
-```bash
-python examples/opt12_lm_optimizer_benchmark.py \
-  --model sshleifer/tiny-gpt2 \
-  --max-train-samples 256 \
-  --steps 100 \
-  --batch-size 2 \
-  --seq-len 128 \
-  --optimizers AdamW Lion Muon \
-  --hellaswag-samples 100 \
-  --out-dir runs/opt12_lm_optimizer_benchmark_tiny
-```
-
-### OPT-3
-
-The CIFAR-10 script has now been run on `vv_h200`. A stronger repeat run can increase rounds, clients, or model width:
-
-```bash
-python examples/opt3_cifar_federated_demo.py \
-  --dataset cifar10 \
-  --download \
-  --clients 40 \
-  --samples-per-client 64 \
-  --test-samples 2000 \
-  --rounds 50 \
-  --updates 150 \
-  --clients-per-round 10 \
-  --local-steps 4 \
-  --batch-size 32 \
-  --model-width 16 \
-  --lr 0.05 \
-  --async-lr 0.02 \
-  --out-dir runs/opt3_cifar_federated_demo_cifar10
-```
-
-This directly targets the distributed-training requirement that mentions CIFAR-10 and ResNet-18-style evaluation. The current run proves the training and artifact pipeline, but it is not a tuned CIFAR-10 benchmark.
-
-The simple A2.Pro package now exists. The next practical step is to run it on the stand:
-
-- build `a2pro-opt3-federated:v1.0.0-base-optlibs`
-- upload the Format 2 package
-- start `federated_train`
-- collect the run id, output checkpoint id and metrics artifact id
-
-After that run, OPT-3 will have the same platform-demonstration shape as OPT-4.
-
-## Honest status
-
-We can say that OPT-1, OPT-2, OPT-3 and OPT-4 are wrapped as Python libraries and can be included in the base image.
-
-We can say that OPT-4 has a completed A2.Pro stand run with output checkpoint and metrics artifact.
-
-We can say that OPT-1/2 have an independent hard vision stress-test where Muon wins over AdamW and Lion on mean validation accuracy across `5` seeds.
-
-We can say that OPT-3 has a reproducible synthetic demo, a real CIFAR-10 server run, and a minimal A2.Pro Format 2 stage package with offline smoke outputs.
-
-We should not say that OPT-3 is already verified on multiple GPUs or clusters.
-
-We should not say that OPT-3 already has a completed stand run until `federated_train` is uploaded and executed on A2.Pro.
-
-We should not say that OPT-1 and OPT-2 have acceptance-level robotics benchmark evidence until the raw robotics run logs are received. We do have an independent small LM benchmark and a Muon-positive vision stress-test.
-
-We should not say that the OPT-4 stand run has clean perplexity until the evaluation wheel is rebuilt and the stage is rerun.
+С учетом этих ограничений отчет корректно закрывает текущий демонстрационный статус ПМ `A2.Оптимизация` и показывает, какие пункты ТЗ реализованы полностью, а какие требуют дополнительного платформенного или экспериментального подтверждения.
