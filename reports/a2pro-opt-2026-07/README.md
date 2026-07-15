@@ -36,9 +36,9 @@
 
 | Блок | Реализация | Экспериментальная проверка | Статус относительно ТЗ |
 |---|---|---|---|
-| ОПТ-1 | `brain_opt`: `AdamW`, `SGD`, `SignSGD`, `Lion`, `get_optimizer`, масштабирование learning rate | Внешний robotics-график `Lion vs AdamW`, серверный LM integration run, hard vision stress-test | Закрывает библиотечную реализацию оптимизаторов и демонстрационный контур. Для строгой приемки robotics-результатов нужны raw logs и описание задачи |
-| ОПТ-2 | `brain_opt`: `Muon`, `Shampoo`, `SOAP`, общий API, fallback-логика для параметров | Внешний robotics-график `Muon vs AdamW`, серверный LM integration run, Muon-positive hard vision benchmark | Закрывает матричные и предобусловленные методы. Основной положительный результат по Muon относится к vision stress-test |
-| ОПТ-3 | `brain_opt.federated`: `FedAvg`, `AsyncSGD`, `Async-LocalSGD`, учет staleness, A2.Pro stage `federated_train` | Synthetic federated demo, CIFAR-10 server run, offline smoke A2.Pro Format 2 package | Закрывает алгоритмическую и библиотечную часть. Требование о реальном multi-device или multi-cluster runtime закрыто частично |
+| ОПТ-1 | `brain_opt`: `AdamW`, `SGD`, `SignSGD`, `Lion`, `get_optimizer`, масштабирование learning rate | Внешний robotics-график `Lion vs AdamW`, серверный LM integration run, stage `lm_finetune` для дообучения LM из A2.Pro checkpoint, hard vision stress-test | Закрывает библиотечную реализацию оптимизаторов и демонстрационный контур. Для строгой приемки robotics-результатов нужны raw logs и описание задачи |
+| ОПТ-2 | `brain_opt`: `Muon`, `Shampoo`, `SOAP`, общий API, fallback-логика для параметров | Внешний robotics-график `Muon vs AdamW`, серверный LM integration run, stage `lm_finetune` для дообучения LM из A2.Pro checkpoint, Muon-positive hard vision benchmark | Закрывает матричные и предобусловленные методы. Основной положительный результат по Muon относится к vision stress-test |
+| ОПТ-3 | `brain_opt.federated`: `FedAvg`, `AsyncSGD`, `Async-LocalSGD`, учет staleness, A2.Pro stages `federated_train` и `federated_lm_finetune` | Synthetic federated demo, CIFAR-10 server run, offline smoke A2.Pro Format 2 package, federated LM fine-tune из checkpoint | Закрывает алгоритмическую и библиотечную часть. Требование о реальном multi-device или multi-cluster runtime закрыто частично |
 | ОПТ-4 | `a2_kvant`, A2.Pro stage `quantize`, рецепты `W8A8`, `W4A16`, `FP8 dynamic` | Qwen3-8B benchmark, завершенный A2.Pro stand run с output checkpoint и metrics artifact | Закрывает post-training quantization и платформенный контур. Pruning не реализован, stand-side perplexity требует повторного запуска после исправления загрузки датасета |
 
 ## 4. Интеграция через базовый образ A2.Pro
@@ -60,7 +60,11 @@ from brain_opt import get_optimizer, run_fedavg, run_async_sgd, run_async_local_
 
 Тем самым решение A2.Pro содержит PlatformAPI-обвязку и описание стадий, а сами оптимизационные методы поставляются как библиотечные компоненты базового образа.
 
-Для ОПТ-3 подготовлен пакет A2.Pro Format 2: [`a2pro/opt3-federated-solution`](../../a2pro/opt3-federated-solution). Пакет содержит stage `federated_train`, который импортирует федеративные методы из `brain_opt`.
+Для ОПТ-1/2 и ОПТ-3 подготовлен пакет A2.Pro Format 2: [`a2pro/opt3-federated-solution`](../../a2pro/opt3-federated-solution). Пакет содержит три stage:
+
+- `lm_finetune`: читает HF-compatible causal LM checkpoint из `in_model`, запускает `AdamW`, `Lion` и `Muon` через `brain_opt.get_optimizer`, сохраняет лучший fine-tuned checkpoint в `out_model` и метрики в `out_metrics`.
+- `federated_lm_finetune`: читает тот же тип `in_model`, делит token-level задачу на клиентов, запускает `FedAvg`, `AsyncSGD` и `Async-LocalSGD` из `brain_opt.federated`, сохраняет лучшую server model и метрики.
+- `federated_train`: сохраняет прежний быстрый synthetic CIFAR-shaped сценарий ОПТ-3 без входного checkpoint.
 
 Для ОПТ-4 подготовлен stage `quantize`, который вызывает `a2_kvant` и записывает результаты в платформенные выходы `out_model` и `out_metrics`.
 
@@ -153,7 +157,33 @@ from brain_opt import get_optimizer, run_fedavg, run_async_sgd, run_async_local_
 - [`artifacts/opt12_lm_real_hellaswag.png`](artifacts/opt12_lm_real_hellaswag.png)
 - [`artifacts/opt12_lm_real_seconds.png`](artifacts/opt12_lm_real_seconds.png)
 
-### 6.4. Muon-positive hard vision benchmark
+### 6.4. A2.Pro stage для дообучения LM из checkpoint storage
+
+Для усиления платформенной демонстрации добавлен stage `lm_finetune` в пакете [`a2pro/opt3-federated-solution`](../../a2pro/opt3-federated-solution).
+
+Отличие от предыдущего `distilgpt2` server run состоит в источнике модели. Stage `lm_finetune` не загружает модель из Hugging Face. Он получает входную модель как `in_model` из A2.Pro checkpoint storage:
+
+1. `client.get_checkpoint(input_name="in_model")`.
+2. Локальная загрузка checkpoint через `platform_io.download_checkpoint`.
+3. `AutoModelForCausalLM.from_pretrained(local_checkpoint)`.
+4. Short fine-tuning для `AdamW`, `Lion` и `Muon` через `brain_opt.get_optimizer`.
+5. Выбор лучшего варианта по validation loss.
+6. Запись fine-tuned checkpoint в `out_model`.
+7. Запись `metrics.csv`, `summary.json`, `summary.md` и графика `val_loss_by_method.png` в `out_metrics`.
+
+Offline smoke выполнен без PlatformAPI: stage создает локальный tiny HF-compatible causal LM checkpoint и прогоняет тот же путь загрузки, дообучения и сохранения.
+
+Результат offline smoke:
+
+| Optimizer | Train loss | Val loss | Steps |
+|---|---:|---:|---:|
+| AdamW | `4.2693` | `4.2118` | `20` |
+| Lion | `4.1009` | `3.9708` | `20` |
+| Muon | `3.7753` | `3.7313` | `20` |
+
+Статус: stage готов и проверен offline. Для полного платформенного подтверждения нужно загрузить HF-compatible LM checkpoint в A2.Pro, запустить `lm_finetune` на стенде и сохранить run id, output checkpoint collection id и metrics artifact id.
+
+### 6.5. Muon-positive hard vision benchmark
 
 Для оценки матричного оптимизатора в более благоприятной для matrix/conv-параметров постановке подготовлен скрипт:
 
@@ -375,6 +405,32 @@ Sample outputs:
 
 Статус: пакет готов к платформенному запуску и имеет offline smoke outputs. Stand run в A2.Pro для ОПТ-3 еще не выполнен.
 
+### 7.6. A2.Pro stage для федеративного LM-дообучения из checkpoint storage
+
+Для демонстрации ОПТ-3 на модели, загружаемой из A2.Pro checkpoint storage, добавлен stage `federated_lm_finetune`.
+
+Поток выполнения:
+
+1. Stage получает HF-compatible causal LM checkpoint как `in_model`.
+2. Checkpoint скачивается локально через PlatformAPI.
+3. Модель загружается через `AutoModelForCausalLM.from_pretrained(local_checkpoint)`.
+4. Synthetic token-level задача делится на клиентов.
+5. Запускаются `FedAvg`, `AsyncSGD` и `Async-LocalSGD` из `brain_opt.federated`.
+6. Лучшая server model по validation loss сохраняется в `out_model`.
+7. Метрики `train_loss`, `val_loss`, `staleness` и график `val_loss_by_method.png` сохраняются в `out_metrics`.
+
+Offline smoke выполнен на локально созданном tiny HF-compatible checkpoint.
+
+Результат offline smoke:
+
+| Method | Train loss | Val loss | Steps | Mean staleness |
+|---|---:|---:|---:|---:|
+| FedAvg | `4.8097` | `4.8348` | `3` | n/a |
+| AsyncSGD | `4.8099` | `4.8349` | `8` | `2.25` |
+| Async-LocalSGD | `4.8097` | `4.8348` | `8` | `2.25` |
+
+Статус: stage готов и проверен offline. Он усиливает интеграционную демонстрацию ОПТ-3, потому что использует входную модель из A2.Pro storage. При этом он остается single-process simulator и не заменяет реальный multi-device runtime.
+
 ## 8. ОПТ-4: эффективное хранение больших моделей через квантизацию
 
 ### 8.1. Реализация
@@ -475,6 +531,7 @@ HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee7
 Для демонстрации следует показать:
 
 - библиотеку `brain_opt` как единый интерфейс drop-in оптимизаторов;
+- stage `lm_finetune`, где входная LM берется из A2.Pro `in_model`, а выходная дообученная модель сохраняется в `out_model`;
 - внешний график `Lion vs AdamW` на robotics-задаче;
 - LM integration run, где `AdamW`, `Lion` и `Muon` запускаются одним скриптом и сохраняют HellaSwag/GSM8K metrics;
 - hard vision stress-test как независимую проверку optimizer-пайплайна.
@@ -484,6 +541,7 @@ HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee7
 Для демонстрации следует показать:
 
 - наличие `Muon`, `Shampoo` и `SOAP` в библиотеке `brain_opt`;
+- stage `lm_finetune`, где `Muon` может запускаться на входной LM из checkpoint storage через тот же API;
 - внешний график `Muon vs AdamW` на robotics-задаче;
 - hard vision benchmark, где `Muon` достигает mean validation accuracy `0.8499` против `0.4245` у `AdamW` и `0.2696` у `Lion`.
 
@@ -495,6 +553,7 @@ HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee7
 - synthetic demo для `FedAvg`, `AsyncSGD` и `Async-LocalSGD`;
 - CIFAR-10 server run на `vv_h200`;
 - A2.Pro Format 2 package `federated_train`;
+- A2.Pro stage `federated_lm_finetune`, который читает LM из `in_model` и сохраняет federated fine-tuned server model в `out_model`;
 - sample outputs `out_model` и `out_metrics`.
 
 При демонстрации ОПТ-3 необходимо явно указать, что текущая реализация является single-process simulator и не является завершенным multi-device runtime.
@@ -512,18 +571,19 @@ HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee7
 ## 10. Ограничения и оставшиеся работы
 
 1. Для ОПТ-1 и ОПТ-2 требуется получить у команды, выполнявшей robotics-запуски, raw logs, конфигурации и итоговые таблицы по `AdamW`, `Lion` и `Muon`. Без этих данных robotics-графики следует использовать как демонстрационные артефакты, а не как строгие приемочные benchmark-результаты.
-2. Для ОПТ-3 требуется выполнить stand run A2.Pro для stage `federated_train`, сохранить run id, output checkpoint id и metrics artifact id.
-3. Для ОПТ-3 требуется отдельно решить вопрос о необходимости реального multi-device launcher. Если п. 3.5.2.1 трактуется строго, single-process simulator недостаточен.
-4. Для ОПТ-4 требуется повторить stand-side evaluation после исправления загрузки WikiText, чтобы получить чистую perplexity-метрику на стенде.
-5. Pruning в рамках текущей реализации ОПТ-4 не реализован. Текущий delivered scope покрывает post-training quantization, включая `SmoothQuant W8A8` и `GPTQ W4A16`.
+2. Для ОПТ-1/2 требуется выполнить stand run A2.Pro для stage `lm_finetune` на загруженном HF-compatible checkpoint, сохранить run id, output checkpoint id и metrics artifact id.
+3. Для ОПТ-3 требуется выполнить stand run A2.Pro для stages `federated_train` и `federated_lm_finetune`, сохранить run id, output checkpoint id и metrics artifact id.
+4. Для ОПТ-3 требуется отдельно решить вопрос о необходимости реального multi-device launcher. Если п. 3.5.2.1 трактуется строго, single-process simulator недостаточен.
+5. Для ОПТ-4 требуется повторить stand-side evaluation после исправления загрузки WikiText, чтобы получить чистую perplexity-метрику на стенде.
+6. Pruning в рамках текущей реализации ОПТ-4 не реализован. Текущий delivered scope покрывает post-training quantization, включая `SmoothQuant W8A8` и `GPTQ W4A16`.
 
 ## 11. Итоговое заключение
 
 ОПТ-1, ОПТ-2, ОПТ-3 и ОПТ-4 оформлены как Python-библиотеки или библиотечно-платформенные компоненты и могут вызываться из базового образа A2.Pro.
 
-ОПТ-1 и ОПТ-2 закрывают библиотечную реализацию оптимизаторов для обучения и дообучения моделей. Для них подготовлены внешний robotics signal, LM integration run и независимый vision stress-test. Основной положительный результат для `Muon` получен на controlled matrix/conv vision benchmark.
+ОПТ-1 и ОПТ-2 закрывают библиотечную реализацию оптимизаторов для обучения и дообучения моделей. Для них подготовлены внешний robotics signal, LM integration run, независимый vision stress-test и stage `lm_finetune`, который дообучает LM, загруженную из A2.Pro checkpoint storage. Основной положительный результат для `Muon` получен на controlled matrix/conv vision benchmark.
 
-ОПТ-3 закрывает алгоритмическую часть федеративной и асинхронной оптимизации на уровне simulator, воспроизводимых demo-запусков и A2.Pro Format 2 package. Строгая multi-device проверка и stand run остаются следующими шагами.
+ОПТ-3 закрывает алгоритмическую часть федеративной и асинхронной оптимизации на уровне simulator, воспроизводимых demo-запусков и A2.Pro Format 2 package. Дополнительно добавлен stage `federated_lm_finetune`, который применяет FedAvg, AsyncSGD и Async-LocalSGD к LM checkpoint из A2.Pro storage. Строгая multi-device проверка и stand run остаются следующими шагами.
 
 ОПТ-4 закрывает эффективное хранение больших моделей через post-training quantization. Для него выполнены Qwen3-8B benchmark и завершенный A2.Pro stand run с output checkpoint collection и metrics artifact. Pruning и чистая stand-side perplexity остаются вне текущего подтвержденного результата.
 

@@ -1,16 +1,20 @@
 {
   "version": 2,
   "pipeline": {
-    "name": "a2pro-opt3-federated",
-    "title": "OPT-3 Федеративная оптимизация",
-    "description": "A2.Pro Format 2 решение для демонстрации FedAvg, AsyncSGD и Async-Local SGD. Методы вызываются из Python-библиотеки brain_opt, которая должна входить в базовый образ.",
+    "name": "a2pro-optimization-storage-demo",
+    "title": "A2.Pro Оптимизация: библиотечные методы из БО",
+    "description": "A2.Pro Format 2 решение для демонстрации ОПТ-1/2 и ОПТ-3 через Python-библиотеку brain_opt из базового образа. LM fine-tune stages читают входной checkpoint из хранилища A2.Pro, дообучают модель и сохраняют новый checkpoint с метриками.",
     "version": {
       "major": 1,
-      "minor": 0,
+      "minor": 1,
       "patch": 0,
       "postfix": null
     },
     "tags": [
+      {
+        "name": "lm-finetuning",
+        "title": "Дообучение LM"
+      },
       {
         "name": "federated-optimization",
         "title": "Федеративная оптимизация"
@@ -28,6 +32,18 @@
         "title": "Федеративное обучение",
         "description": "Запускает FedAvg, AsyncSGD и Async-Local SGD из brain_opt на симулированных клиентах и сохраняет обученный чекпоинт с метриками.",
         "manifestPath": "./stages/federated_train/stage.json"
+      },
+      {
+        "name": "lm_finetune",
+        "title": "LM-дообучение из checkpoint",
+        "description": "Читает HF-compatible LM checkpoint из A2.Pro, дообучает модель с AdamW/Lion/Muon через brain_opt.get_optimizer и сохраняет новый checkpoint с метриками.",
+        "manifestPath": "./stages/lm_finetune/stage.json"
+      },
+      {
+        "name": "federated_lm_finetune",
+        "title": "Федеративное LM-дообучение из checkpoint",
+        "description": "Читает HF-compatible LM checkpoint из A2.Pro, делит token-level задачу на клиентов и запускает FedAvg, AsyncSGD и Async-LocalSGD из brain_opt.",
+        "manifestPath": "./stages/federated_lm_finetune/stage.json"
       }
     ],
     "connections": []

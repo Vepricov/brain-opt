@@ -6,14 +6,14 @@
     "postfix": null
   },
   "image": {
-    "name": "a2pro-opt3-federated:v1.0.0-base-optlibs"
+    "name": "a2pro-opt3-federated:v1.1.0-base-optlibs"
   },
-  "entrypoint": "python src/federated_train_main.py",
+  "entrypoint": "python src/federated_lm_finetune_main.py",
   "parameters": [
     {
-      "name": "simulation",
-      "title": "Симуляция клиентов",
-      "description": "Конфигурация федеративного датасета и набора методов.",
+      "name": "federated",
+      "title": "Федеративная постановка",
+      "description": "Параметры разбиения synthetic token blocks по клиентам.",
       "type": "section",
       "properties": {
         "expanded": true,
@@ -22,7 +22,7 @@
             "name": "method",
             "type": "enum",
             "title": "Метод",
-            "description": "Какие методы OPT-3 запустить.",
+            "description": "Какие методы ОПТ-3 запустить.",
             "properties": {
               "defaultValue": "all",
               "availableValues": [
@@ -39,10 +39,10 @@
             "title": "Клиентов",
             "description": "Число симулированных клиентов.",
             "properties": {
-              "defaultValue": 20,
+              "defaultValue": 6,
               "minimumValue": 2,
               "exclusiveMinimumValue": false,
-              "maximumValue": 200,
+              "maximumValue": 64,
               "exclusiveMaximumValue": false,
               "step": 1
             }
@@ -51,41 +51,53 @@
             "name": "samplesPerClient",
             "type": "int",
             "title": "Сэмплов на клиента",
-            "description": "Локальный размер данных одного клиента.",
+            "description": "Число token blocks на каждого клиента.",
+            "properties": {
+              "defaultValue": 8,
+              "minimumValue": 2,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 256,
+              "exclusiveMaximumValue": false,
+              "step": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "data",
+      "title": "Данные",
+      "description": "Параметры token-level LM задачи.",
+      "type": "section",
+      "properties": {
+        "expanded": true,
+        "widgets": [
+          {
+            "name": "valSamples",
+            "type": "int",
+            "title": "Validation samples",
+            "description": "Число validation token blocks.",
             "properties": {
               "defaultValue": 24,
               "minimumValue": 4,
               "exclusiveMinimumValue": false,
-              "maximumValue": 512,
+              "maximumValue": 1024,
               "exclusiveMaximumValue": false,
               "step": 4
             }
           },
           {
-            "name": "testSamples",
+            "name": "seqLen",
             "type": "int",
-            "title": "Тестовых сэмплов",
-            "description": "Размер тестовой выборки для итоговой accuracy.",
+            "title": "Sequence length",
+            "description": "Длина token block.",
             "properties": {
-              "defaultValue": 256,
-              "minimumValue": 32,
+              "defaultValue": 48,
+              "minimumValue": 16,
               "exclusiveMinimumValue": false,
-              "maximumValue": 4096,
+              "maximumValue": 512,
               "exclusiveMaximumValue": false,
-              "step": 32
-            }
-          },
-          {
-            "name": "split",
-            "type": "enum",
-            "title": "Разбиение",
-            "description": "IID или label-skew распределение данных по клиентам.",
-            "properties": {
-              "defaultValue": "label-skew",
-              "availableValues": [
-                "label-skew",
-                "iid"
-              ]
+              "step": 16
             }
           }
         ]
@@ -94,7 +106,7 @@
     {
       "name": "training",
       "title": "Обучение",
-      "description": "Гиперпараметры локального и серверного обучения.",
+      "description": "Параметры FedAvg и async методов.",
       "type": "section",
       "properties": {
         "expanded": true,
@@ -103,37 +115,9 @@
             "name": "rounds",
             "type": "int",
             "title": "FedAvg раундов",
-            "description": "Число синхронных раундов FedAvg.",
+            "description": "Число синхронных FedAvg раундов.",
             "properties": {
-              "defaultValue": 12,
-              "minimumValue": 1,
-              "exclusiveMinimumValue": false,
-              "maximumValue": 1000,
-              "exclusiveMaximumValue": false,
-              "step": 1
-            }
-          },
-          {
-            "name": "updates",
-            "type": "int",
-            "title": "Async updates",
-            "description": "Число асинхронных обновлений сервера.",
-            "properties": {
-              "defaultValue": 40,
-              "minimumValue": 1,
-              "exclusiveMinimumValue": false,
-              "maximumValue": 5000,
-              "exclusiveMaximumValue": false,
-              "step": 1
-            }
-          },
-          {
-            "name": "clientsPerRound",
-            "type": "int",
-            "title": "Клиентов в раунде",
-            "description": "Сколько клиентов участвует в одном FedAvg раунде.",
-            "properties": {
-              "defaultValue": 5,
+              "defaultValue": 3,
               "minimumValue": 1,
               "exclusiveMinimumValue": false,
               "maximumValue": 200,
@@ -142,15 +126,43 @@
             }
           },
           {
+            "name": "updates",
+            "type": "int",
+            "title": "Async updates",
+            "description": "Число асинхронных server updates.",
+            "properties": {
+              "defaultValue": 8,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1000,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "clientsPerRound",
+            "type": "int",
+            "title": "Клиентов в раунде",
+            "description": "Число клиентов в одном FedAvg раунде.",
+            "properties": {
+              "defaultValue": 3,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 64,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
             "name": "localSteps",
             "type": "int",
             "title": "Локальных шагов",
-            "description": "Число SGD шагов на клиенте.",
+            "description": "Число локальных SGD шагов на клиенте.",
             "properties": {
-              "defaultValue": 2,
+              "defaultValue": 1,
               "minimumValue": 1,
               "exclusiveMinimumValue": false,
-              "maximumValue": 50,
+              "maximumValue": 20,
               "exclusiveMaximumValue": false,
               "step": 1
             }
@@ -161,26 +173,12 @@
             "title": "Batch size",
             "description": "Размер локального mini-batch.",
             "properties": {
-              "defaultValue": 16,
+              "defaultValue": 2,
               "minimumValue": 1,
-              "exclusiveMinimumValue": false,
-              "maximumValue": 512,
-              "exclusiveMaximumValue": false,
-              "step": 1
-            }
-          },
-          {
-            "name": "modelWidth",
-            "type": "int",
-            "title": "Ширина модели",
-            "description": "Ширина небольшой CNN модели.",
-            "properties": {
-              "defaultValue": 8,
-              "minimumValue": 4,
               "exclusiveMinimumValue": false,
               "maximumValue": 64,
               "exclusiveMaximumValue": false,
-              "step": 4
+              "step": 1
             }
           },
           {
@@ -189,12 +187,12 @@
             "title": "Local LR",
             "description": "Learning rate для FedAvg и Async-Local SGD.",
             "properties": {
-              "defaultValue": 0.05,
-              "minimumValue": 0.0001,
+              "defaultValue": 0.0005,
+              "minimumValue": 0.000001,
               "exclusiveMinimumValue": false,
-              "maximumValue": 1.0,
+              "maximumValue": 0.1,
               "exclusiveMaximumValue": false,
-              "step": 0.005
+              "step": 0.0001
             }
           },
           {
@@ -203,12 +201,12 @@
             "title": "Async LR",
             "description": "Learning rate для AsyncSGD.",
             "properties": {
-              "defaultValue": 0.02,
-              "minimumValue": 0.0001,
+              "defaultValue": 0.0002,
+              "minimumValue": 0.000001,
               "exclusiveMinimumValue": false,
-              "maximumValue": 1.0,
+              "maximumValue": 0.1,
               "exclusiveMaximumValue": false,
-              "step": 0.005
+              "step": 0.0001
             }
           },
           {
@@ -229,24 +227,41 @@
       }
     }
   ],
-  "inputs": [],
+  "inputs": [
+    {
+      "name": "in_model",
+      "title": "Исходная LM",
+      "description": "HF-compatible checkpoint causal LM из хранилища A2.Pro.",
+      "required": true,
+      "type": "checkpoint",
+      "properties": {
+        "supportedModels": [
+          {
+            "workspace": "optimization/lm-finetune",
+            "arch": "hf-causal-lm",
+            "framework": "torch:2.10.0"
+          }
+        ]
+      }
+    }
+  ],
   "outputs": [
     {
       "name": "out_model",
-      "title": "Обученная модель",
-      "description": "Checkpoint лучшей модели по test accuracy.",
+      "title": "Федеративно дообученная LM",
+      "description": "Checkpoint лучшей server model по validation loss.",
       "alwaysExpected": true,
       "type": "checkpoint-collection",
       "properties": {
         "exportedToWorkspaces": [
-          "optimization/federated"
+          "optimization/lm-finetune"
         ]
       }
     },
     {
       "name": "out_metrics",
-      "title": "Метрики федеративного обучения",
-      "description": "CSV/JSON/Markdown с loss, accuracy и staleness.",
+      "title": "Метрики федеративного LM-дообучения",
+      "description": "CSV/JSON/Markdown и график validation loss по FedAvg/AsyncSGD/Async-LocalSGD.",
       "alwaysExpected": true,
       "type": "artifact",
       "properties": {}

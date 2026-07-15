@@ -1,0 +1,246 @@
+{
+  "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0,
+    "postfix": null
+  },
+  "image": {
+    "name": "a2pro-opt3-federated:v1.1.0-base-optlibs"
+  },
+  "entrypoint": "python src/lm_finetune_main.py",
+  "parameters": [
+    {
+      "name": "optimization",
+      "title": "Оптимизация",
+      "description": "Выбор оптимизаторов ОПТ-1/2 и их гиперпараметров.",
+      "type": "section",
+      "properties": {
+        "expanded": true,
+        "widgets": [
+          {
+            "name": "optimizers",
+            "type": "enum",
+            "title": "Оптимизаторы",
+            "description": "Какие оптимизаторы запустить на одном входном checkpoint.",
+            "properties": {
+              "defaultValue": "all",
+              "availableValues": [
+                "all",
+                "AdamW",
+                "Lion",
+                "Muon"
+              ]
+            }
+          },
+          {
+            "name": "lr",
+            "type": "float",
+            "title": "Learning rate",
+            "description": "Базовый learning rate, передаваемый в brain_opt.get_optimizer.",
+            "properties": {
+              "defaultValue": 0.001,
+              "minimumValue": 0.000001,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1.0,
+              "exclusiveMaximumValue": false,
+              "step": 0.0001
+            }
+          },
+          {
+            "name": "weightDecay",
+            "type": "float",
+            "title": "Weight decay",
+            "description": "Decoupled weight decay для оптимизаторов.",
+            "properties": {
+              "defaultValue": 0.0,
+              "minimumValue": 0.0,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1.0,
+              "exclusiveMaximumValue": false,
+              "step": 0.001
+            }
+          },
+          {
+            "name": "autoScaleLr",
+            "type": "bool",
+            "title": "Автомасштабировать LR",
+            "description": "Использовать brain_opt LR scaling для разных семейств оптимизаторов.",
+            "properties": {
+              "defaultValue": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "data",
+      "title": "Данные",
+      "description": "Параметры детерминированной token-level задачи для короткого дообучения.",
+      "type": "section",
+      "properties": {
+        "expanded": true,
+        "widgets": [
+          {
+            "name": "trainSamples",
+            "type": "int",
+            "title": "Train samples",
+            "description": "Число synthetic token blocks для train.",
+            "properties": {
+              "defaultValue": 128,
+              "minimumValue": 8,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 4096,
+              "exclusiveMaximumValue": false,
+              "step": 8
+            }
+          },
+          {
+            "name": "valSamples",
+            "type": "int",
+            "title": "Validation samples",
+            "description": "Число synthetic token blocks для validation.",
+            "properties": {
+              "defaultValue": 32,
+              "minimumValue": 4,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1024,
+              "exclusiveMaximumValue": false,
+              "step": 4
+            }
+          },
+          {
+            "name": "seqLen",
+            "type": "int",
+            "title": "Sequence length",
+            "description": "Длина token block.",
+            "properties": {
+              "defaultValue": 64,
+              "minimumValue": 16,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 512,
+              "exclusiveMaximumValue": false,
+              "step": 16
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "training",
+      "title": "Обучение",
+      "description": "Параметры short fine-tuning запуска.",
+      "type": "section",
+      "properties": {
+        "expanded": true,
+        "widgets": [
+          {
+            "name": "steps",
+            "type": "int",
+            "title": "Шагов",
+            "description": "Число optimizer steps для каждого метода.",
+            "properties": {
+              "defaultValue": 20,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1000,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "batchSize",
+            "type": "int",
+            "title": "Batch size",
+            "description": "Размер mini-batch.",
+            "properties": {
+              "defaultValue": 4,
+              "minimumValue": 1,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 128,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          },
+          {
+            "name": "seed",
+            "type": "int",
+            "title": "Seed",
+            "description": "Seed для synthetic token blocks и batch sampling.",
+            "properties": {
+              "defaultValue": 123,
+              "minimumValue": 0,
+              "exclusiveMinimumValue": false,
+              "maximumValue": 1000000,
+              "exclusiveMaximumValue": false,
+              "step": 1
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "name": "in_model",
+      "title": "Исходная LM",
+      "description": "HF-compatible checkpoint causal LM из хранилища A2.Pro.",
+      "required": true,
+      "type": "checkpoint",
+      "properties": {
+        "supportedModels": [
+          {
+            "workspace": "optimization/lm-finetune",
+            "arch": "hf-causal-lm",
+            "framework": "torch:2.10.0"
+          }
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "out_model",
+      "title": "Дообученная LM",
+      "description": "Checkpoint лучшей модели по validation loss.",
+      "alwaysExpected": true,
+      "type": "checkpoint-collection",
+      "properties": {
+        "exportedToWorkspaces": [
+          "optimization/lm-finetune"
+        ]
+      }
+    },
+    {
+      "name": "out_metrics",
+      "title": "Метрики дообучения",
+      "description": "CSV/JSON/Markdown и график validation loss по оптимизаторам.",
+      "alwaysExpected": true,
+      "type": "artifact",
+      "properties": {}
+    }
+  ],
+  "resources": {
+    "supportedUnits": [
+      {
+        "type": "GPU",
+        "minimum": 1,
+        "maximum": null,
+        "replicas": 1,
+        "step": 1,
+        "sharedMemory": 1024,
+        "memorySize": 8192,
+        "launchTypes": [
+          "job"
+        ],
+        "properties": {
+          "unitMemorySize": 8192,
+          "frameworks": [
+            "cuda"
+          ],
+          "cpuNumberPerUnit": 4
+        }
+      }
+    ]
+  }
+}
