@@ -1,6 +1,6 @@
 # Отчет о реализации и экспериментальной проверке ОПТ-1, ОПТ-2, ОПТ-3 и ОПТ-4
 
-Дата актуализации: 15-07-2026
+Дата актуализации: 20-07-2026
 
 Репозиторий: [Vepricov/brain-opt](https://github.com/Vepricov/brain-opt/tree/codex/a2pro-opt-report)
 
@@ -39,7 +39,7 @@
 | ОПТ-1 | `brain_opt`: `AdamW`, `SGD`, `SignSGD`, `Lion`, `get_optimizer`, масштабирование learning rate | Внешний robotics-график `Lion vs AdamW`, серверный LM integration run, stage `lm_finetune` для дообучения LM из A2.Pro checkpoint, hard vision stress-test | Закрывает библиотечную реализацию оптимизаторов и демонстрационный контур. Для строгой приемки robotics-результатов нужны raw logs и описание задачи |
 | ОПТ-2 | `brain_opt`: `Muon`, `Shampoo`, `SOAP`, общий API, fallback-логика для параметров | Внешний robotics-график `Muon vs AdamW`, серверный LM integration run, stage `lm_finetune` для дообучения LM из A2.Pro checkpoint, Muon-positive hard vision benchmark | Закрывает матричные и предобусловленные методы. Основной положительный результат по Muon относится к vision stress-test |
 | ОПТ-3 | `brain_opt.federated`: `FedAvg`, `AsyncSGD`, `Async-LocalSGD`, учет staleness, A2.Pro stages `federated_train` и `federated_lm_finetune` | Synthetic federated demo, CIFAR-10 server run, offline smoke A2.Pro Format 2 package, federated LM fine-tune из checkpoint | Закрывает алгоритмическую и библиотечную часть. Требование о реальном multi-device или multi-cluster runtime закрыто частично |
-| ОПТ-4 | `a2_kvant`, A2.Pro stage `quantize`, рецепты `W8A8`, `W4A16`, `FP8 dynamic` | Qwen3-8B benchmark, завершенный A2.Pro stand run с output checkpoint и metrics artifact | Закрывает post-training quantization и платформенный контур. Pruning не реализован, stand-side perplexity требует повторного запуска после исправления загрузки датасета |
+| ОПТ-4 | `a2_kvant`, A2.Pro stage `quantize`, рецепт `W4A16/GPTQ` | Benchmark на checkpoint `Qwen2.5-Math-1.5B`, выгруженном из A2.Pro storage | Закрывает post-training quantization и ресурсный критерий `>2x` по размеру checkpoint и footprint весов. Pruning не реализован |
 
 ## 4. Интеграция через базовый образ A2.Pro
 
@@ -443,11 +443,9 @@ Offline smoke выполнен на локально созданном tiny HF-
 - `a2_kvant`: Python-библиотека квантизации.
 - A2.Pro stage `quantize`: PlatformAPI-обвязка над `a2_kvant`.
 
-Поддерживаемые рецепты:
+В демонстрации отчета используется один рецепт:
 
-- `w8a8`: SmoothQuant и GPTQ, INT8 weights и INT8 activations.
 - `w4a16`: GPTQ INT4 weights и FP16 activations.
-- `fp8`: dynamic FP8 weights и activations.
 
 Поток выполнения stage:
 
@@ -460,72 +458,38 @@ Offline smoke выполнен на локально созданном tiny HF-
 7. Запись `out_metrics` как artifact.
 8. Публикация progress state.
 
-### 8.2. Qwen3-8B benchmark
+### 8.2. Основная демонстрация `>2x`: Qwen2.5-Math-1.5B из A2.Pro storage
 
-Модель: `Qwen/Qwen3-8B`
+Модель: `Qwen2.5-Math-1.5B`
 
-Рецепт: `w8a8`
+Источник модели: checkpoint, выгруженный из A2.Pro storage в архив `qwen2.5-math-1.5b.zip`.
+
+Рецепт: `w4a16`, GPTQ INT4 weights и FP16 activations.
 
 Результаты:
 
-| Metric | FP16 | W8A8 |
+| Metric | FP16 | W4A16 |
 |---|---:|---:|
-| Disk size | `15.26 GiB` | `8.79 GiB` |
-| VRAM for weights | `15.27 GiB` | `8.80 GiB` |
-| Generation speed | `78.16 tok/s` | `114.02 tok/s` |
-| WikiText-2 perplexity | `8.622` | `8.533` |
-| HellaSwag acc_norm | `0.7500` | `0.7542` |
-| GSM8K strict | `0.906` | `0.910` |
+| Weight file size | `2.875 GiB` | `1.064 GiB` |
+| Directory disk size | `2.886 GiB` | `1.079 GiB` |
+| Compression ratio by weights | `1.00x` | `2.70x` |
+| Size reduction by weights | `0.0%` | `63.0%` |
+| WikiText-2 perplexity | `23.884` | `24.802` |
+| Generation speed, HF eval | `20.47 tok/s` | `28.30 tok/s` |
+| Mean latency, HF eval | `3663.31 ms` | `3251.29 ms` |
 
-![Qwen3-8B FP16 vs W8A8](artifacts/opt4_qwen3_w8a8_comparison.png)
+![Qwen2.5-Math-1.5B FP16 vs W4A16](artifacts/opt4_qwen25_math_w4a16_comparison.png)
 
 Артефакты:
 
-- [`artifacts/opt4_run_config.json`](artifacts/opt4_run_config.json)
-- [`artifacts/opt4_compare_vllm.json`](artifacts/opt4_compare_vllm.json)
-- [`artifacts/opt4_qwen3_w8a8_comparison.png`](artifacts/opt4_qwen3_w8a8_comparison.png)
+- [`artifacts/opt4_qwen25_math_fp16_report.json`](artifacts/opt4_qwen25_math_fp16_report.json)
+- [`artifacts/opt4_qwen25_math_w4a16_report.json`](artifacts/opt4_qwen25_math_w4a16_report.json)
+- [`artifacts/opt4_qwen25_math_w4a16_compare.json`](artifacts/opt4_qwen25_math_w4a16_compare.json)
+- [`artifacts/opt4_qwen25_math_w4a16_comparison.png`](artifacts/opt4_qwen25_math_w4a16_comparison.png)
 
-Интерпретация: W8A8 снижает размер весовых файлов с `15.26 GiB` до `8.79 GiB`, уменьшает объем VRAM для весов с `15.27 GiB` до `8.80 GiB` и увеличивает скорость генерации с `78.16 tok/s` до `114.02 tok/s` при сохранении качества на использованных коротких benchmark-наборах.
+Интерпретация: W4A16/GPTQ снижает размер файла весов с `3,087,467,144` до `1,142,692,360` байт. Коэффициент сжатия равен `2.70x`, экономия равна `63.0%`. Это закрывает требование о снижении ресурсных затрат не менее чем в 2 раза в части хранения checkpoint и footprint весов модели. На коротком quality-прогоне WikiText-2 perplexity ухудшается на `3.84%`, при этом скорость генерации в HF evaluation увеличивается на `38.2%`.
 
-### 8.3. A2.Pro stand run
-
-Метаданные платформенного запуска:
-
-- run: `61af8071-adb5-4dbe-8c06-8200bfba3c66`
-- project: `3d07ae35-3d92-4af5-ba0d-732f00664959`
-- experiment: `58d8b9cc-6d23-4cc5-9136-832cb52e76a7`
-- stage: `295120f3-ef63-4c37-9240-832a462eeb8b`
-- image: `a2pro-quantization:v1.0.16-base-optlibs`
-- input checkpoint: `172aabea-8fac-4c41-a17a-0824ddc57170`
-- output checkpoint collection: `0b535f00-85fa-414c-af27-9efe8a6ad9c7`
-- metrics artifact: `dbbf6083-1224-4159-a450-c1a9a4fdd65c`
-
-Ресурсные метрики:
-
-- input size: `2.8861 GiB`
-- output disk size: `1.6671 GiB`
-- compression ratio: `1.7312`
-
-Artifact:
-
-- [`artifacts/opt4_stand_metrics.json`](artifacts/opt4_stand_metrics.json)
-
-Платформенный запуск подтверждает следующие свойства:
-
-- Stage корректно прочитал входной checkpoint.
-- Ошибка доступа к checkpoint через RustFS/PlatformAPI не воспроизвелась.
-- Stage выполнил квантизацию модели.
-- Stage создал и загрузил output checkpoint collection.
-- Stage записал metrics artifact.
-- Run завершился в состоянии `COMPLETED`, progress `100`.
-
-Ограничение запуска: stand-side evaluation завершилась с `evaluation_error`:
-
-```text
-HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee71d232d685c3/.huggingface.yaml'
-```
-
-Следовательно, данный stand run доказывает квантизацию, checkpoint IO и ресурсные метрики. Чистая stand-side perplexity должна быть получена отдельным повторным запуском после обновления wheel `a2_kvant` или исправления загрузки датасета. Метрики качества для W8A8 закрыты отдельным Qwen3-8B benchmark.
+Видеопамять, измеренная через HF loader, не используется как основной ресурсный claim для W4A16. В этом режиме loader частично распаковывает compressed tensors при оценке. Поэтому основной приемочный показатель для данной демонстрации, размер checkpoint и footprint весов. Отдельный serving-прогон через vLLM можно использовать как дополнительную проверку peak VRAM, если приемка потребует именно runtime VRAM.
 
 ## 9. Демонстрационный сценарий
 
@@ -565,11 +529,11 @@ HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee7
 
 Для демонстрации следует показать:
 
-- Qwen3-8B FP16 vs W8A8 benchmark;
-- платформенный run `61af8071-adb5-4dbe-8c06-8200bfba3c66`;
-- output checkpoint collection `0b535f00-85fa-414c-af27-9efe8a6ad9c7`;
-- metrics artifact `dbbf6083-1224-4159-a450-c1a9a4fdd65c`;
-- compression ratio `1.7312`.
+- Qwen2.5-Math-1.5B FP16 vs W4A16 benchmark на checkpoint из A2.Pro storage;
+- compression ratio `2.7019`, reduction `62.99%`;
+- график [`artifacts/opt4_qwen25_math_w4a16_comparison.png`](artifacts/opt4_qwen25_math_w4a16_comparison.png);
+- сводный artifact [`artifacts/opt4_qwen25_math_w4a16_compare.json`](artifacts/opt4_qwen25_math_w4a16_compare.json);
+- PlatformAPI path stage `quantize` для чтения checkpoint, записи checkpoint collection и записи metrics artifact.
 
 ## 10. Ограничения и оставшиеся работы
 
@@ -577,8 +541,8 @@ HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee7
 2. Для ОПТ-1/2 требуется выполнить stand run A2.Pro для stage `lm_finetune` на загруженном HF-compatible checkpoint, сохранить run id, output checkpoint id и metrics artifact id.
 3. Для ОПТ-3 требуется выполнить stand run A2.Pro для stages `federated_train` и `federated_lm_finetune`, сохранить run id, output checkpoint id и metrics artifact id.
 4. Для ОПТ-3 требуется отдельно решить вопрос о необходимости реального multi-device launcher. Если п. 3.5.2.1 трактуется строго, single-process simulator недостаточен.
-5. Для ОПТ-4 требуется повторить stand-side evaluation после исправления загрузки WikiText, чтобы получить чистую perplexity-метрику на стенде.
-6. Pruning в рамках текущей реализации ОПТ-4 не реализован. Текущий delivered scope покрывает post-training quantization, включая `SmoothQuant W8A8` и `GPTQ W4A16`.
+5. Для ОПТ-4 ресурсный критерий `>2x` закрыт по размеру checkpoint и footprint весов. Если приемка будет требовать именно peak VRAM в serving runtime, нужен отдельный vLLM-прогон W4A16 на том же checkpoint.
+6. Pruning в рамках текущей реализации ОПТ-4 не реализован. Текущий delivered scope покрывает post-training quantization через `GPTQ W4A16`.
 
 ## 11. Итоговое заключение
 
@@ -588,6 +552,6 @@ HfUriError: Invalid HF URI 'hf://datasets/wikitext@b08601e04326c79dfdd32d625aee7
 
 ОПТ-3 закрывает алгоритмическую часть федеративной и асинхронной оптимизации на уровне simulator, воспроизводимых demo-запусков и A2.Pro Format 2 package. Дополнительно добавлен stage `federated_lm_finetune`, который применяет FedAvg, AsyncSGD и Async-LocalSGD к LM checkpoint из A2.Pro storage. Строгая multi-device проверка и stand run остаются следующими шагами.
 
-ОПТ-4 закрывает эффективное хранение больших моделей через post-training quantization. Для него выполнены Qwen3-8B benchmark и завершенный A2.Pro stand run с output checkpoint collection и metrics artifact. Pruning и чистая stand-side perplexity остаются вне текущего подтвержденного результата.
+ОПТ-4 закрывает эффективное хранение больших моделей через post-training quantization. Основной ресурсный результат получен на checkpoint `Qwen2.5-Math-1.5B` из A2.Pro storage: W4A16/GPTQ уменьшает файл весов в `2.70x`, что соответствует экономии `63.0%`. Pruning остается вне текущего подтвержденного результата.
 
 С учетом этих ограничений отчет корректно закрывает текущий демонстрационный статус ПМ `A2.Оптимизация` и показывает, какие пункты ТЗ реализованы полностью, а какие требуют дополнительного платформенного или экспериментального подтверждения.

@@ -1,0 +1,47 @@
+{
+  "model_source": "A2.Pro stand checkpoint zip: qwen2.5-math-1.5b.zip",
+  "model": "Qwen2.5-Math-1.5B",
+  "baseline": {
+    "label": "qwen2_5_math_fp16",
+    "model_path": "checkpoints/Qwen2.5-Math-1.5B-FP16",
+    "perplexity": 23.884389877319336,
+    "disk_size_gb": 2.886127301491797,
+    "vram_alloc_gb": 2.907618999481201,
+    "latency_ms_mean": 3663.3132385710874,
+    "latency_ms_min": 3269.2347019910812,
+    "tokens_per_s": 20.473269719423314,
+    "generated_tokens": 75.0,
+    "model_safetensors_bytes": 3087467144,
+    "weight_footprint_gib": 2.8754278495907784
+  },
+  "optimized": {
+    "label": "qwen2_5_math_w4a16",
+    "model_path": "checkpoints/Qwen2.5-Math-1.5B-W4A16",
+    "perplexity": 24.801849365234375,
+    "disk_size_gb": 1.07900623511523,
+    "vram_alloc_gb": 2.9267783164978027,
+    "latency_ms_mean": 3251.2897898753486,
+    "latency_ms_min": 3121.5382032096386,
+    "tokens_per_s": 28.296462618155978,
+    "generated_tokens": 92.0,
+    "recipe": "w4a16_gptq",
+    "model_safetensors_bytes": 1142692360,
+    "weight_footprint_gib": 1.0642151907086372
+  },
+  "compression": {
+    "model_safetensors_ratio": 2.701923327815021,
+    "model_safetensors_reduction_pct": 62.98932728010919,
+    "disk_dir_ratio": 2.6748013195526896,
+    "disk_dir_reduction_pct": 62.614045660511664
+  },
+  "quality": {
+    "perplexity_delta_abs": 0.9174594879150391,
+    "perplexity_delta_pct": 3.8412515145980874
+  },
+  "runtime": {
+    "tokens_per_s_ratio": 1.3821174148509692,
+    "tokens_per_s_delta_pct": 38.211741485096915,
+    "latency_delta_pct": -11.247289594499776,
+    "hf_vram_note": "HF loader dequantizes compressed tensors for parts of evaluation; use weight_footprint_gib as the 2x resource metric, not vram_alloc_gb."
+  }
+}

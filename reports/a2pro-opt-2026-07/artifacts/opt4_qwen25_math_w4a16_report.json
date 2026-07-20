@@ -1,0 +1,11 @@
+{
+  "label": "qwen2_5_math_w4a16",
+  "model_path": "checkpoints/Qwen2.5-Math-1.5B-W4A16",
+  "perplexity": 24.801849365234375,
+  "disk_size_gb": 1.07900623511523,
+  "vram_alloc_gb": 2.9267783164978027,
+  "latency_ms_mean": 3251.2897898753486,
+  "latency_ms_min": 3121.5382032096386,
+  "tokens_per_s": 28.296462618155978,
+  "generated_tokens": 92.0
+}
