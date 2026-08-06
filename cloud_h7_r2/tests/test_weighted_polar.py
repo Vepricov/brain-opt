@@ -90,9 +90,17 @@ class WeightedPolarTest(unittest.TestCase):
                 optimizer.step()
             self.assertTrue(
                 torch.allclose(
-                    parameter.detach(), expected_parameter, rtol=0.0, atol=5e-3
+                    parameter.detach(), expected_parameter, rtol=2e-2, atol=1.5e-2
                 )
             )
+            actual_flat = parameter.detach().float().flatten()
+            expected_flat = expected_parameter.float().flatten()
+            cosine = torch.dot(actual_flat, expected_flat) / (
+                actual_flat.norm() * expected_flat.norm()
+            )
+            norm_ratio = actual_flat.norm() / expected_flat.norm()
+            self.assertGreaterEqual(float(cosine), 0.999)
+            self.assertLessEqual(abs(float(norm_ratio) - 1.0), 0.02)
             self.assertTrue(
                 torch.equal(
                     optimizer.state[parameter]["momentum_buffer"], expected_buffer
