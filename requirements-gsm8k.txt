@@ -13,3 +13,8 @@ pyarrow==19.0.1
 torchdata==0.11.0
 wandb==0.19.11
 math-verify==0.6.0
+tensordict==0.8.3
+dill==0.3.8
+pandas==2.2.3
+pybind11==2.13.6
+tensorboard==2.19.0

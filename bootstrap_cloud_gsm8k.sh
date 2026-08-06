@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 repo_root=$(cd "$(dirname "$0")" && pwd)
-campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r1
+campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r2
 state_root="$campaign_root/bootstrap"
 verl_root="$campaign_root/verl"
 data_root="$campaign_root/data/gsm8k"
@@ -28,7 +28,7 @@ python -m pip install --user -r "$repo_root/requirements-gsm8k.txt" || finish $?
 git clone https://github.com/verl-project/verl.git "$verl_root" || finish $?
 git -C "$verl_root" checkout 7aed6b230776f963fa09509c10d9c3a767d1102c || finish $?
 git -C "$verl_root" apply "$repo_root/0001-feat-add-role-routed-Muon-optimizer-for-GSM8K-PPO.patch" || finish $?
-python -m pip install --user --no-deps -e "$verl_root" || finish $?
+python -m pip install --user -e "$verl_root" || finish $?
 
 PYTHONPATH="$verl_root" python - <<'PY' || finish $?
 import json

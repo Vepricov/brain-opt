@@ -5,7 +5,7 @@ seed=${2:?seed is required}
 case "$mode" in smoke|full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
 case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
-campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r1
+campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r2
 verl_root="$campaign_root/verl"
 data_root="$campaign_root/data/gsm8k"
 model_root="$campaign_root/models/qwen2.5-0.5b-instruct"
