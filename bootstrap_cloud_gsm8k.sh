@@ -32,7 +32,9 @@ finish() {
   exit 0
 }
 
-python3 -m pip install --user -r "$repo_root/requirements-gsm8k.txt" || finish $?
+python3 -m pip install --user \
+  -c "$repo_root/constraints-gsm8k-r4.txt" \
+  -r "$repo_root/requirements-gsm8k.txt" || finish $?
 git clone https://github.com/verl-project/verl.git "$verl_root" || finish $?
 git -C "$verl_root" checkout 7aed6b230776f963fa09509c10d9c3a767d1102c || finish $?
 git -C "$verl_root" apply "$repo_root/0001-feat-add-role-routed-Muon-optimizer-for-GSM8K-PPO.patch" || finish $?
