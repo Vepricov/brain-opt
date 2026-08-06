@@ -16,13 +16,13 @@ class CloudH7R2ProfileTest(unittest.TestCase):
         self.assertEqual(profile["datasets"], "2.20.0")
         self.assertEqual(profile["accelerate"], "0.33.0")
         self.assertEqual(profile["numpy"], "1.26.4")
-        self.assertEqual(profile["campaign_root"], "/home/jovyan/rl_muon/h7_online_cloud_r2")
+        self.assertEqual(profile["campaign_root"], "/home/jovyan/rl_muon/h7_online_cloud_r3")
 
     def test_bootstrap_is_fail_closed_and_runs_compatibility_checks(self):
         script = (ROOT / "bootstrap_cloud_h7_r2.sh").read_text()
 
         self.assertIn("cloud_h7_r2/profile.json", script)
-        self.assertIn("h7_online_cloud_r2", script)
+        self.assertIn("h7_online_cloud_r3", script)
         self.assertIn('state_root="$campaign_root/bootstrap"', script)
         self.assertIn("unittest discover", script)
         self.assertIn("cloud_h7_r2/tests", script)
@@ -36,7 +36,7 @@ class CloudH7R2ProfileTest(unittest.TestCase):
     def test_runner_uses_r2_bootstrap_and_preserves_scientific_gates(self):
         script = (ROOT / "run_cloud_h7_r2.sh").read_text()
 
-        self.assertIn("h7_online_cloud_r2", script)
+        self.assertIn("h7_online_cloud_r3", script)
         self.assertIn("cloud_h7_r2/profile.json", script)
         self.assertIn("waiting_for_bootstrap", script)
         self.assertIn("raw_muon own_polar_d01 own_polar_d1", script)
@@ -46,7 +46,7 @@ class CloudH7R2ProfileTest(unittest.TestCase):
     def test_collector_reads_only_the_fresh_r2_namespace(self):
         script = (ROOT / "collect_cloud_h7_r2.sh").read_text()
 
-        self.assertIn("h7_online_cloud_r2", script)
+        self.assertIn("h7_online_cloud_r3", script)
         self.assertNotIn("h7_online_cloud_r1", script)
         self.assertIn("payload.failed.json", script)
         self.assertIn('"state":"complete"', script)

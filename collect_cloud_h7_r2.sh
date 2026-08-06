@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -u
-campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r2
+campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r3
 collector_root="$campaign_root/collector"
 if ! mkdir "$collector_root"; then
   echo "refusing duplicate collector endpoint: $collector_root"
@@ -52,4 +52,3 @@ else
 fi
 # Preserve Cloud.ru logs. Scientific success is the durable collector status.
 exit 0
-

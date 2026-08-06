@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 root=$(cd "$(dirname "$0")" && pwd)
-campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r2
+campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r3
 state_root="$campaign_root/bootstrap"
 mkdir -p "$campaign_root"
 if ! mkdir "$state_root"; then
@@ -84,9 +84,9 @@ if [[ "$status" -eq 0 ]]; then
 fi
 printf '%s\n' "$status" > "$state_root/exit"
 if [[ "$status" -eq 0 ]]; then
-  printf '{"state":"complete","profile":"cloud-py310-r2"}\n' > "$state_root/status.json.tmp"
+  printf '{"state":"complete","profile":"cloud-py310-r3"}\n' > "$state_root/status.json.tmp"
 else
-  printf '{"state":"failed","profile":"cloud-py310-r2","exit":%s}\n' "$status" > "$state_root/status.json.tmp"
+  printf '{"state":"failed","profile":"cloud-py310-r3","exit":%s}\n' "$status" > "$state_root/status.json.tmp"
 fi
 mv "$state_root/status.json.tmp" "$state_root/status.json"
 tail -120 "$log"

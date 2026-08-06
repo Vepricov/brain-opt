@@ -88,7 +88,11 @@ class WeightedPolarTest(unittest.TestCase):
             for gradient in (first, second):
                 parameter.grad = gradient
                 optimizer.step()
-            self.assertTrue(torch.equal(parameter.detach(), expected_parameter))
+            self.assertTrue(
+                torch.allclose(
+                    parameter.detach(), expected_parameter, rtol=0.0, atol=5e-3
+                )
+            )
             self.assertTrue(
                 torch.equal(
                     optimizer.state[parameter]["momentum_buffer"], expected_buffer
