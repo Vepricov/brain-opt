@@ -3,7 +3,7 @@ set -u
 seed=${1:?seed is required}
 case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
-campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r3
+campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r4
 seed_root="$campaign_root/seed_${seed}"
 mkdir -p "$campaign_root"
 if ! mkdir "$seed_root"; then

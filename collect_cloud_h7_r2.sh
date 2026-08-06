@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -u
-campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r3
+campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r4
 collector_root="$campaign_root/collector"
 if ! mkdir "$collector_root"; then
   echo "refusing duplicate collector endpoint: $collector_root"

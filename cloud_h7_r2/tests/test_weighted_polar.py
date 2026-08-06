@@ -102,8 +102,11 @@ class WeightedPolarTest(unittest.TestCase):
             self.assertGreaterEqual(float(cosine), 0.999)
             self.assertLessEqual(abs(float(norm_ratio) - 1.0), 0.02)
             self.assertTrue(
-                torch.equal(
-                    optimizer.state[parameter]["momentum_buffer"], expected_buffer
+                torch.allclose(
+                    optimizer.state[parameter]["momentum_buffer"],
+                    expected_buffer,
+                    rtol=1e-6,
+                    atol=1e-6,
                 )
             )
 

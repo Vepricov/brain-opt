@@ -5,5 +5,5 @@
   "datasets": "2.20.0",
   "accelerate": "0.33.0",
   "numpy": "1.26.4",
-  "campaign_root": "/home/jovyan/rl_muon/h7_online_cloud_r3"
+  "campaign_root": "/home/jovyan/rl_muon/h7_online_cloud_r4"
 }
