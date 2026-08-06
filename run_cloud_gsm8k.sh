@@ -114,4 +114,41 @@ for row_index, row in enumerate(rows):
 print(json.dumps({"route": route, "rows": len(rows), "terminal_step": max(steps)}), flush=True)
 PY
 done
+python3 - "$run_root" "$mode" "$seed" "$source_commit" <<'PY' || finish $?
+import json
+import math
+import sys
+from pathlib import Path
+
+run_root = Path(sys.argv[1])
+phase = sys.argv[2]
+seed = int(sys.argv[3])
+source_commit = sys.argv[4]
+routes = {}
+for route in ("adam_adam", "muon_actor", "muon_critic"):
+    paths = list((run_root / route).rglob("metrics.jsonl"))
+    if len(paths) != 1:
+        raise RuntimeError(f"expected one metrics file for {route}, found {len(paths)}")
+    rows = [json.loads(line) for line in paths[0].read_text().splitlines()
+            if line.strip()]
+    terminal = max(rows, key=lambda row: int(row["step"]))
+    metrics = {}
+    for key, value in sorted(terminal.get("data", {}).items()):
+        if (isinstance(key, str) and len(key) <= 128
+                and isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(float(value)) and len(metrics) < 64):
+            metrics[key] = value
+    routes[route] = {
+        "rows": len(rows), "terminal_step": int(terminal["step"]),
+        "metrics": metrics,
+    }
+result = {
+    "phase": phase, "seed": seed, "source_commit": source_commit,
+    "routes": routes,
+}
+(run_root / "result.json").write_text(
+    json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
+print("RL_MUON_RESULT " + json.dumps(
+    result, sort_keys=True, separators=(",", ":")), flush=True)
+PY
 finish 0
