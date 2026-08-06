@@ -29,6 +29,23 @@ finish() {
   # defined only by the durable status/exit pair and validated result artifacts.
   exit 0
 }
+bootstrap_status="$campaign_root/bootstrap/status.json"
+bootstrap_deadline=$((SECONDS + 3600))
+write_status waiting_for_bootstrap "waiting for exact persistent Python environment"
+while true; do
+  if [[ -f "$bootstrap_status" ]] && grep -q '"state":"complete"' "$bootstrap_status"; then
+    break
+  fi
+  if [[ -f "$bootstrap_status" ]] && grep -q '"state":"failed"' "$bootstrap_status"; then
+    echo "bootstrap failed: $bootstrap_status"
+    finish 75
+  fi
+  if (( SECONDS >= bootstrap_deadline )); then
+    echo "bootstrap did not complete within 3600 seconds"
+    finish 76
+  fi
+  sleep 15
+done
 cd "$repo_root"
 write_status running "environment validation"
 python - <<'PY' || finish $?
