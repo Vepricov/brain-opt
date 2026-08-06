@@ -5,7 +5,12 @@ seed=${2:?seed is required}
 case "$mode" in smoke|full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
 case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
-campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r3
+source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
+[[ "$(git -C "$repo_root" rev-parse HEAD)" == "$source_commit" ]] || {
+  echo "source commit mismatch"
+  exit 73
+}
+campaign_root=${RL_MUON_CAMPAIGN_ROOT:?RL_MUON_CAMPAIGN_ROOT is required}
 verl_root="$campaign_root/verl"
 data_root="$campaign_root/data/gsm8k"
 model_root="$campaign_root/models/qwen2.5-0.5b-instruct"
@@ -24,6 +29,8 @@ finish() {
   local code=$1
   printf '%s\n' "$code" > "$run_root/exit"
   write_status "$([[ "$code" -eq 0 ]] && echo complete || echo failed)" "runner_exit=$code"
+  printf 'RL_MUON_TERMINAL '
+  cat "$run_root/status.json"
   tail -120 "$log"
   exit 0
 }
@@ -38,12 +45,12 @@ while true; do
 done
 
 export PYTHONPATH="$verl_root"
-export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r3
+export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r4
 export PATH="$PYTHONUSERBASE/bin:$PATH"
 export HF_HOME="$campaign_root/hf-cache"
 export TORCH_HOME="$campaign_root/torch-cache"
 export TOKENIZERS_PARALLELISM=false
-python - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
+python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
 import hashlib
 import json
 import sys
@@ -83,7 +90,7 @@ for route in "${routes[@]}"; do
     echo "missing metrics for route=$route"
     finish 77
   fi
-  python - "$metrics" "$expected_step" "$route" <<'PY' || finish $?
+  python3 - "$metrics" "$expected_step" "$route" <<'PY' || finish $?
 import json
 import math
 import sys
