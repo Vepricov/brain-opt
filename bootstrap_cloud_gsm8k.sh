@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 repo_root=$(cd "$(dirname "$0")" && pwd)
-campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r2
+campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r3
 state_root="$campaign_root/bootstrap"
 verl_root="$campaign_root/verl"
 data_root="$campaign_root/data/gsm8k"
@@ -14,7 +14,7 @@ fi
 log="$state_root/bootstrap.log"
 exec > >(tee -a "$log") 2>&1
 status=0
-export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085
+export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r3
 export PATH="$PYTHONUSERBASE/bin:$PATH"
 finish() {
   local code=$1
@@ -35,6 +35,7 @@ import json
 import platform
 import accelerate
 import datasets
+import google.protobuf
 import ray
 import torch
 import transformers
@@ -49,6 +50,7 @@ observed = {
     "ray": ray.__version__,
     "datasets": datasets.__version__,
     "accelerate": accelerate.__version__,
+    "protobuf": google.protobuf.__version__,
     "config": FSDPOptimizerConfig().__class__.__name__,
 }
 expected = {
@@ -59,6 +61,7 @@ expected = {
     "ray": "2.43.0",
     "datasets": "3.6.0",
     "accelerate": "1.6.0",
+    "protobuf": "4.25.9",
     "config": "FSDPOptimizerConfig",
 }
 print(json.dumps(observed, sort_keys=True), flush=True)

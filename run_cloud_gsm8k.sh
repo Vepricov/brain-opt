@@ -5,7 +5,7 @@ seed=${2:?seed is required}
 case "$mode" in smoke|full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
 case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
-campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r2
+campaign_root=/home/jovyan/rl_muon/gsm8k_ppo_r3
 verl_root="$campaign_root/verl"
 data_root="$campaign_root/data/gsm8k"
 model_root="$campaign_root/models/qwen2.5-0.5b-instruct"
@@ -38,7 +38,7 @@ while true; do
 done
 
 export PYTHONPATH="$verl_root"
-export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085
+export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r3
 export PATH="$PYTHONUSERBASE/bin:$PATH"
 export HF_HOME="$campaign_root/hf-cache"
 export TORCH_HOME="$campaign_root/torch-cache"
