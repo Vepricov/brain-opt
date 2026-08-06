@@ -1,0 +1,9 @@
+{
+  "python": "3.10.14",
+  "torch": "2.1.2+cu121",
+  "transformers": "4.44.0",
+  "datasets": "2.20.0",
+  "accelerate": "0.33.0",
+  "numpy": "1.26.4",
+  "campaign_root": "/home/jovyan/rl_muon/h7_online_cloud_r2"
+}
