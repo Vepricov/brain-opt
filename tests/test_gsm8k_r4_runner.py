@@ -38,9 +38,12 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
                 run = root / route
                 run.mkdir()
                 rows = [
-                    {"step": 1, "data": {metric: 0.25}},
+                    {"step": 0, "data": {metric: 0.25}},
                     {"step": 3, "data": {metric: 0.75,
-                                           "actor/grad_norm": 1.5}},
+                                           "actor/grad_norm": 1.5,
+                                           "actor/ppo_kl": 0.01,
+                                           "actor/pg_clipfrac": 0.02,
+                                           "critic/vf_clipfrac": 0.03}},
                 ]
                 (run / "metrics.jsonl").write_text(
                     "".join(json.dumps(row) + "\n" for row in rows))
@@ -48,11 +51,12 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
             result = build_result(root, "full", 0, "commit", 3)
 
         route = result["routes"]["muon_actor"]
-        self.assertEqual([1, 3], [point["step"]
+        self.assertEqual([0, 3], [point["step"]
                                   for point in route["validation_points"]])
         self.assertEqual(0.75, route["final_validation"])
         self.assertEqual(0.5, route["validation_auc"])
         self.assertEqual(1.5, route["terminal_metrics"]["actor/grad_norm"])
+        self.assertEqual(0.01, route["safety_points"][0]["metrics"]["actor/ppo_kl"])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ ROUTES = ("adam_adam", "muon_actor", "muon_critic")
 SAFETY_PREFIXES = (
     "actor/", "critic/", "response_length/", "prompt_length/", "perf/",
 )
+REQUIRED_SAFETY_METRICS = (
+    "actor/ppo_kl", "actor/pg_clipfrac", "critic/vf_clipfrac",
+)
 
 
 def build_result(
@@ -32,6 +35,7 @@ def build_result(
         terminal = rows[-1]
         validation_metric = None
         validation_points = []
+        safety_points = []
         for row in rows:
             candidates = {
                 key: value for key, value in row.get("data", {}).items()
@@ -55,6 +59,22 @@ def build_result(
                     f"validation metric changed for {route}: "
                     f"{validation_metric} -> {key}")
             validation_points.append({"step": int(row["step"]), "value": value})
+            step = int(row["step"])
+            if step > 0:
+                data = row.get("data", {})
+                missing = [key for key in REQUIRED_SAFETY_METRICS
+                           if key not in data]
+                if missing:
+                    raise RuntimeError(
+                        f"missing safety metrics for {route} step {step}: {missing}")
+                metrics = {key: data[key] for key in REQUIRED_SAFETY_METRICS}
+                if any(isinstance(value, bool)
+                       or not isinstance(value, (int, float))
+                       or not math.isfinite(float(value))
+                       for value in metrics.values()):
+                    raise RuntimeError(
+                        f"invalid safety metrics for {route} step {step}")
+                safety_points.append({"step": step, "metrics": metrics})
         if not validation_points or validation_points[-1]["step"] != expected_step:
             raise RuntimeError(
                 f"missing terminal validation endpoint for {route} "
@@ -82,6 +102,7 @@ def build_result(
             "validation_points": validation_points,
             "final_validation": validation_points[-1]["value"],
             "validation_auc": validation_auc,
+            "safety_points": safety_points,
             "terminal_metrics": terminal_metrics,
         }
     return {
