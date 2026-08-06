@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -u
 seed=${1:?seed is required}
-case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 0 ;; esac
+case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
 campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r1
 seed_root="$campaign_root/seed_${seed}"
-mkdir -p "$seed_root"
+mkdir -p "$campaign_root"
+if ! mkdir "$seed_root"; then
+  echo "refusing duplicate or resumed seed root: $seed_root"
+  exit 74
+fi
 log="$seed_root/cloud_runner.log"
 exec > >(tee -a "$log") 2>&1
 write_status() {
@@ -21,6 +25,8 @@ finish() {
     write_status failed "runner_exit=$code"
   fi
   tail -100 "$log"
+  # Cloud.ru suppresses logs for failed platform jobs. Scientific success is
+  # defined only by the durable status/exit pair and validated result artifacts.
   exit 0
 }
 cd "$repo_root"
@@ -44,6 +50,52 @@ for route in raw_muon own_polar_d01 own_polar_d1; do
   write_status running "route=$route"
   printf '{"time":"%s","seed":%s,"route":"%s","event":"start"}\n' "$(date -Is)" "$seed" "$route" >> "$seed_root/progress.jsonl"
   python cloud_h7/h7_online_ppo.py --config "cloud_h7/configs/config_seed${seed}.json" --route "$route" --run-dir "$run_dir" || finish $?
+  python - "$run_dir" "$seed" "$route" <<'PY' || finish $?
+import json
+import math
+import sys
+from pathlib import Path
+
+run_dir = Path(sys.argv[1])
+seed = int(sys.argv[2])
+route = sys.argv[3]
+
+def load_jsonl(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+def require_finite(value, path="root"):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            require_finite(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            require_finite(item, f"{path}[{index}]")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise RuntimeError(f"non-finite value at {path}: {value}")
+
+if (run_dir / "failure.json").exists():
+    raise RuntimeError(f"failure artifact exists: {run_dir / 'failure.json'}")
+result = json.loads((run_dir / "result.json").read_text())
+progress = load_jsonl(run_dir / "progress.jsonl")
+evaluations = load_jsonl(run_dir / "eval.jsonl")
+require_finite(result)
+require_finite(progress)
+require_finite(evaluations)
+if result.get("status") != "complete" or result.get("seed") != seed or result.get("route") != route:
+    raise RuntimeError(f"invalid result identity: {result}")
+if result.get("total_updates") != 20 or len(progress) != 20:
+    raise RuntimeError(f"invalid progress length: result={result.get('total_updates')}, rows={len(progress)}")
+if [row.get("update") for row in progress] != list(range(1, 21)):
+    raise RuntimeError("progress update schedule mismatch")
+if [row.get("update") for row in evaluations] != [0, 5, 10, 15, 20]:
+    raise RuntimeError("evaluation schedule mismatch")
+for row in progress:
+    for key in ("calibration_budget_ratio", "realized_functional_budget_ratio"):
+        ratio = float(row[key])
+        if not 0.98 <= ratio <= 1.02:
+            raise RuntimeError(f"strict budget mismatch at update {row['update']}: {key}={ratio}")
+print(f"VALIDATED seed={seed} route={route}", flush=True)
+PY
   printf '{"time":"%s","seed":%s,"route":"%s","event":"complete"}\n' "$(date -Is)" "$seed" "$route" >> "$seed_root/progress.jsonl"
 done
 finish 0

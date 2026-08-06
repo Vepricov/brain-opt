@@ -1,6 +1,6 @@
 {
-  "train_prompts_path": "cloud_h7/data/llm_qwen_main_r1/imdb-train-efd331a311c6.jsonl",
-  "eval_prompts_path": "cloud_h7/data/llm_qwen_main_r1/imdb-eval-8e4a88f98cd5.jsonl",
+  "train_prompts_path": "cloud_h7/data/imdb-train-efd331a311c6.jsonl",
+  "eval_prompts_path": "cloud_h7/data/imdb-eval-8e4a88f98cd5.jsonl",
   "actor_model_id": "Qwen/Qwen2.5-0.5B",
   "actor_model_revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
   "reference_model_id": "Qwen/Qwen2.5-0.5B",
@@ -34,4 +34,3 @@
   "value_coef": 0.5,
   "max_grad_norm": 1.0
 }
-
