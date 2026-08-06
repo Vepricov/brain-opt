@@ -1,0 +1,523 @@
+From 899975c2e7e5827724a93154b03a1b7f8d756fd7 Mon Sep 17 00:00:00 2001
+From: vepricov <veprikov.as@phystech.edu>
+Date: Thu, 6 Aug 2026 13:16:01 +0300
+Subject: [PATCH] feat: add role-routed Muon optimizer for GSM8K PPO
+
+---
+ examples/data_preprocess/gsm8k.py             |   3 +-
+ ...n_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh | 101 +++++++++
+ .../config/test_muon_optimizer_on_cpu.py      |  88 ++++++++
+ verl/utils/optimizers.py                      | 208 ++++++++++++++++++
+ verl/workers/config/optimizer.py              |  31 ++-
+ verl/workers/engine/fsdp/transformer_impl.py  |   2 +-
+ 6 files changed, 430 insertions(+), 3 deletions(-)
+ create mode 100644 examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh
+ create mode 100644 tests/workers/config/test_muon_optimizer_on_cpu.py
+ create mode 100644 verl/utils/optimizers.py
+
+diff --git a/examples/data_preprocess/gsm8k.py b/examples/data_preprocess/gsm8k.py
+index 1656cdbc..65023595 100644
+--- a/examples/data_preprocess/gsm8k.py
++++ b/examples/data_preprocess/gsm8k.py
+@@ -37,6 +37,7 @@ if __name__ == "__main__":
+     parser.add_argument("--local_dir", default=None, help="The save directory for the preprocessed dataset.")
+     parser.add_argument("--hdfs_dir", default=None)
+     parser.add_argument("--local_dataset_path", default=None, help="The local path to the raw dataset, if it exists.")
++    parser.add_argument("--revision", default=None, help="Pinned Hugging Face dataset revision.")
+     parser.add_argument(
+         "--local_save_dir", default="~/data/gsm8k", help="The save directory for the preprocessed dataset."
+     )
+@@ -49,7 +50,7 @@ if __name__ == "__main__":
+     if local_dataset_path is not None:
+         dataset = datasets.load_dataset(local_dataset_path, "main")
+     else:
+-        dataset = datasets.load_dataset(data_source, "main")
++        dataset = datasets.load_dataset(data_source, "main", revision=args.revision)
+ 
+     train_dataset = dataset["train"]
+     test_dataset = dataset["test"]
+diff --git a/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh b/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh
+new file mode 100644
+index 00000000..99b85b1b
+--- /dev/null
++++ b/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh
+@@ -0,0 +1,101 @@
++#!/usr/bin/env bash
++# PPO on GSM8K with role-conditioned AdamW/Muon optimizer routing.
++
++set -euo pipefail
++
++ROUTE=${ROUTE:?Set ROUTE to adam_adam, muon_actor, or muon_critic}
++SEED=${SEED:?Set SEED to the paired run seed}
++MODEL_PATH=${MODEL_PATH:?Set MODEL_PATH to the pinned local model snapshot}
++DATA_ROOT=${DATA_ROOT:?Set DATA_ROOT to the prepared GSM8K directory}
++OUTPUT_ROOT=${OUTPUT_ROOT:?Set OUTPUT_ROOT to a persistent output directory}
++
++case "$ROUTE" in
++    adam_adam)
++        ACTOR_OPT=AdamW
++        ACTOR_OPT_IMPL=torch.optim
++        ACTOR_OPT_OVERRIDE=null
++        CRITIC_OPT=AdamW
++        CRITIC_OPT_IMPL=torch.optim
++        CRITIC_OPT_OVERRIDE=null
++        ;;
++    muon_actor)
++        ACTOR_OPT=MuonWithAuxAdamW
++        ACTOR_OPT_IMPL=verl.utils.optimizers
++        ACTOR_OPT_OVERRIDE='{muon_adjust_lr_fn: match_rms_adamw}'
++        CRITIC_OPT=AdamW
++        CRITIC_OPT_IMPL=torch.optim
++        CRITIC_OPT_OVERRIDE=null
++        ;;
++    muon_critic)
++        ACTOR_OPT=AdamW
++        ACTOR_OPT_IMPL=torch.optim
++        ACTOR_OPT_OVERRIDE=null
++        CRITIC_OPT=MuonWithAuxAdamW
++        CRITIC_OPT_IMPL=verl.utils.optimizers
++        CRITIC_OPT_OVERRIDE='{muon_adjust_lr_fn: match_rms_adamw}'
++        ;;
++    *)
++        echo "Unsupported ROUTE=$ROUTE" >&2
++        exit 2
++        ;;
++esac
++
++RUN_NAME="qwen2.5-0.5b_gsm8k_ppo_${ROUTE}_seed${SEED}"
++RUN_DIR="$OUTPUT_ROOT/$RUN_NAME"
++mkdir -p "$RUN_DIR"
++export VERL_FILE_LOGGER_PATH="$RUN_DIR/metrics.jsonl"
++
++python3 -m verl.trainer.main_ppo \
++    algorithm.adv_estimator=gae \
++    algorithm.kl_ctrl.type=fixed \
++    algorithm.kl_ctrl.kl_coef=0.001 \
++    data.train_files="$DATA_ROOT/train.parquet" \
++    data.val_files="$DATA_ROOT/test.parquet" \
++    data.train_batch_size=256 \
++    data.max_prompt_length=512 \
++    data.max_response_length=256 \
++    data.filter_overlong_prompts=True \
++    data.truncation=error \
++    data.seed="$SEED" \
++    actor_rollout_ref.model.path="$MODEL_PATH" \
++    actor_rollout_ref.model.use_remove_padding=True \
++    actor_rollout_ref.model.enable_gradient_checkpointing=True \
++    actor_rollout_ref.actor.optim.optimizer="$ACTOR_OPT" \
++    actor_rollout_ref.actor.optim.optimizer_impl="$ACTOR_OPT_IMPL" \
++    actor_rollout_ref.actor.optim.lr=1e-6 \
++    actor_rollout_ref.actor.optim.weight_decay=0.01 \
++    actor_rollout_ref.actor.optim.override_optimizer_config="$ACTOR_OPT_OVERRIDE" \
++    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
++    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
++    actor_rollout_ref.actor.data_loader_seed="$SEED" \
++    actor_rollout_ref.actor.fsdp_config.use_orig_params=True \
++    actor_rollout_ref.actor.fsdp_config.seed="$SEED" \
++    actor_rollout_ref.rollout.name=vllm \
++    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
++    actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
++    actor_rollout_ref.rollout.n=1 \
++    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
++    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
++    critic.model.path="$MODEL_PATH" \
++    critic.model.use_remove_padding=True \
++    critic.model.enable_gradient_checkpointing=True \
++    critic.optim.optimizer="$CRITIC_OPT" \
++    critic.optim.optimizer_impl="$CRITIC_OPT_IMPL" \
++    critic.optim.lr=1e-5 \
++    critic.optim.weight_decay=0.01 \
++    critic.optim.override_optimizer_config="$CRITIC_OPT_OVERRIDE" \
++    critic.ppo_mini_batch_size=64 \
++    critic.ppo_micro_batch_size_per_gpu=4 \
++    critic.data_loader_seed="$SEED" \
++    critic.fsdp.use_orig_params=True \
++    critic.fsdp.seed="$SEED" \
++    trainer.logger='[console,file]' \
++    trainer.project_name=rl_muon_gsm8k \
++    trainer.experiment_name="$RUN_NAME" \
++    trainer.default_local_dir="$RUN_DIR/checkpoints" \
++    trainer.n_gpus_per_node=1 \
++    trainer.nnodes=1 \
++    trainer.save_freq=50 \
++    trainer.test_freq=10 \
++    trainer.total_epochs=15 \
++    "$@" 2>&1 | tee "$RUN_DIR/train.log"
+diff --git a/tests/workers/config/test_muon_optimizer_on_cpu.py b/tests/workers/config/test_muon_optimizer_on_cpu.py
+new file mode 100644
+index 00000000..31c3a6bc
+--- /dev/null
++++ b/tests/workers/config/test_muon_optimizer_on_cpu.py
+@@ -0,0 +1,88 @@
++# Copyright 2024 Bytedance Ltd. and/or its affiliates
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++
++import torch
++from torch import nn
++
++from verl.utils.optimizers import Muon, MuonWithAuxAdamW
++from verl.workers.config.optimizer import FSDPOptimizerConfig, build_optimizer, partition_named_parameters_for_muon
++
++
++class _TinyQwenBlock(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.embed_tokens = nn.Embedding(16, 4)
++        self.self_attn = nn.ModuleDict({"q_proj": nn.Linear(4, 4)})
++        self.mlp = nn.ModuleDict({"up_proj": nn.Linear(4, 8)})
++        self.input_layernorm = nn.LayerNorm(4)
++        self.lm_head = nn.Linear(4, 16, bias=False)
++
++
++def test_muon_backport_matches_pytorch_reference_step():
++    parameter = nn.Parameter(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
++    parameter.grad = torch.tensor([[0.1, -0.2], [0.3, -0.4]])
++    optimizer = Muon([parameter], lr=1e-3, weight_decay=0.01)
++
++    optimizer.step()
++
++    expected = torch.tensor([[1.0001833, 2.0002087], [2.9997590, 4.0000324]])
++    torch.testing.assert_close(parameter, expected, rtol=0, atol=2e-7)
++
++
++def test_muon_partition_is_disjoint_exhaustive_and_excludes_auxiliary_parameters():
++    model = _TinyQwenBlock()
++
++    muon, auxiliary = partition_named_parameters_for_muon(model.named_parameters())
++
++    muon_names = {name for name, _ in muon}
++    auxiliary_names = {name for name, _ in auxiliary}
++    all_names = {name for name, _ in model.named_parameters()}
++
++    assert muon_names == {
++        "self_attn.q_proj.weight",
++        "mlp.up_proj.weight",
++    }
++    assert muon_names.isdisjoint(auxiliary_names)
++    assert muon_names | auxiliary_names == all_names
++    assert "embed_tokens.weight" in auxiliary_names
++    assert "lm_head.weight" in auxiliary_names
++    assert "input_layernorm.weight" in auxiliary_names
++    assert "self_attn.q_proj.bias" in auxiliary_names
++
++
++def test_muon_with_aux_adamw_factory_step_and_state_round_trip(monkeypatch):
++    class _FakeMuon(torch.optim.SGD):
++        def __init__(self, params, lr, weight_decay, momentum, nesterov, ns_steps, adjust_lr_fn):
++            super().__init__(params, lr=lr, weight_decay=weight_decay, momentum=momentum, nesterov=nesterov)
++
++    monkeypatch.setattr(torch.optim, "Muon", _FakeMuon, raising=False)
++    model = _TinyQwenBlock()
++    config = FSDPOptimizerConfig(
++        optimizer="MuonWithAuxAdamW",
++        optimizer_impl="verl.utils.optimizers",
++        lr=1e-3,
++        weight_decay=0.01,
++    )
++    optimizer = build_optimizer(model.named_parameters(), config)
++
++    assert isinstance(optimizer, MuonWithAuxAdamW)
++    assert optimizer.parameter_routes["muon"] == (
++        "self_attn.q_proj.weight",
++        "mlp.up_proj.weight",
++    )
++
++    loss = sum(parameter.square().sum() for parameter in model.parameters())
++    loss.backward()
++    optimizer.step()
++    auxiliary_parameter = model.input_layernorm.weight
++    assert optimizer.state[auxiliary_parameter] is optimizer.auxiliary.state[auxiliary_parameter]
++    checkpoint = optimizer.state_dict()
++
++    restored = build_optimizer(model.named_parameters(), config)
++    restored.load_state_dict(checkpoint)
++    assert restored.state_dict()["parameter_routes"] == checkpoint["parameter_routes"]
+diff --git a/verl/utils/optimizers.py b/verl/utils/optimizers.py
+new file mode 100644
+index 00000000..dc7bb9cf
+--- /dev/null
++++ b/verl/utils/optimizers.py
+@@ -0,0 +1,208 @@
++# Copyright 2024 Bytedance Ltd. and/or its affiliates
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++
++from collections.abc import Iterable, MutableMapping
++import math
++
++import torch
++from torch import Tensor
++from torch.optim import Optimizer
++
++
++class _RoutedOptimizerState(MutableMapping):
++    def __init__(self, muon_state, auxiliary_state, muon_parameters):
++        self._muon_state = muon_state
++        self._auxiliary_state = auxiliary_state
++        self._muon_parameters = set(muon_parameters)
++
++    def _state_for(self, parameter):
++        return self._muon_state if parameter in self._muon_parameters else self._auxiliary_state
++
++    def __getitem__(self, parameter):
++        return self._state_for(parameter)[parameter]
++
++    def __setitem__(self, parameter, value):
++        self._state_for(parameter)[parameter] = value
++
++    def __delitem__(self, parameter):
++        del self._state_for(parameter)[parameter]
++
++    def __iter__(self):
++        yield from self._muon_state
++        yield from self._auxiliary_state
++
++    def __len__(self):
++        return len(self._muon_state) + len(self._auxiliary_state)
++
++
++def _zeropower_via_newton_schulz(gradient: Tensor, ns_steps: int, eps: float) -> Tensor:
++    if gradient.ndim != 2:
++        raise ValueError("Muon only supports two-dimensional gradients")
++    update = gradient.bfloat16()
++    transposed = update.size(0) > update.size(1)
++    if transposed:
++        update = update.T
++    update.div_(update.norm().clamp(min=eps))
++    for _ in range(ns_steps):
++        gram = update @ update.T
++        gram_update = torch.addmm(gram, gram, gram, beta=-4.775, alpha=2.0315)
++        update = torch.addmm(update, gram_update, update, beta=3.4445)
++    return update.T if transposed else update
++
++
++class Muon(Optimizer):
++    """PyTorch-compatible Muon backport for runtimes older than PyTorch 2.9."""
++
++    def __init__(
++        self,
++        params,
++        lr: float,
++        weight_decay: float,
++        momentum: float = 0.95,
++        nesterov: bool = True,
++        ns_steps: int = 5,
++        adjust_lr_fn: str = "match_rms_adamw",
++        eps: float = 1e-7,
++    ):
++        if adjust_lr_fn not in ("original", "match_rms_adamw"):
++            raise ValueError(f"Unsupported Muon learning-rate adjustment: {adjust_lr_fn}")
++        defaults = {
++            "lr": lr,
++            "weight_decay": weight_decay,
++            "momentum": momentum,
++            "nesterov": nesterov,
++            "ns_steps": ns_steps,
++            "adjust_lr_fn": adjust_lr_fn,
++            "eps": eps,
++        }
++        super().__init__(params, defaults)
++        for group in self.param_groups:
++            for parameter in group["params"]:
++                if parameter.ndim != 2:
++                    raise ValueError(f"Muon only supports 2D parameters, got {tuple(parameter.shape)}")
++
++    @torch.no_grad()
++    def step(self, closure=None):
++        loss = None
++        if closure is not None:
++            with torch.enable_grad():
++                loss = closure()
++        for group in self.param_groups:
++            for parameter in group["params"]:
++                if parameter.grad is None:
++                    continue
++                gradient = parameter.grad
++                if gradient.is_sparse:
++                    raise RuntimeError("Muon does not support sparse gradients")
++                state = self.state[parameter]
++                if "momentum_buffer" not in state:
++                    state["momentum_buffer"] = torch.zeros_like(gradient)
++                momentum_buffer = state["momentum_buffer"]
++                momentum_buffer.lerp_(gradient, 1 - group["momentum"])
++                update = (
++                    gradient.lerp(momentum_buffer, group["momentum"])
++                    if group["nesterov"]
++                    else momentum_buffer
++                )
++                update = _zeropower_via_newton_schulz(update, group["ns_steps"], group["eps"])
++                rows, columns = parameter.shape
++                if group["adjust_lr_fn"] == "match_rms_adamw":
++                    adjusted_lr = group["lr"] * 0.2 * math.sqrt(max(rows, columns))
++                else:
++                    adjusted_lr = group["lr"] * math.sqrt(max(1, rows / columns))
++                parameter.mul_(1 - group["lr"] * group["weight_decay"])
++                parameter.add_(update, alpha=-adjusted_lr)
++        return loss
++
++
++class MuonWithAuxAdamW(Optimizer):
++    """Muon for hidden matrices and AdamW for all auxiliary parameters."""
++
++    requires_named_parameters = True
++
++    def __init__(
++        self,
++        named_parameters: Iterable[tuple[str, Tensor]],
++        lr: float,
++        weight_decay: float,
++        betas: tuple[float, float] = (0.9, 0.999),
++        muon_lr: float | None = None,
++        muon_weight_decay: float | None = None,
++        muon_momentum: float = 0.95,
++        muon_nesterov: bool = True,
++        muon_ns_steps: int = 5,
++        muon_adjust_lr_fn: str = "match_rms_adamw",
++        auxiliary_lr: float | None = None,
++        auxiliary_weight_decay: float | None = None,
++    ):
++        from verl.workers.config.optimizer import partition_named_parameters_for_muon
++
++        named_parameters = list(named_parameters)
++        muon_named, auxiliary_named = partition_named_parameters_for_muon(named_parameters)
++        if not muon_named or not auxiliary_named:
++            raise ValueError("MuonWithAuxAdamW requires non-empty Muon and auxiliary parameter partitions")
++
++        all_parameters = [parameter for _, parameter in named_parameters]
++        super().__init__(all_parameters, {"lr": lr})
++
++        muon_cls = getattr(torch.optim, "Muon", Muon)
++        self.muon = muon_cls(
++            [parameter for _, parameter in muon_named],
++            lr=muon_lr if muon_lr is not None else lr,
++            weight_decay=muon_weight_decay if muon_weight_decay is not None else weight_decay,
++            momentum=muon_momentum,
++            nesterov=muon_nesterov,
++            ns_steps=muon_ns_steps,
++            adjust_lr_fn=muon_adjust_lr_fn,
++        )
++        self.auxiliary = torch.optim.AdamW(
++            [parameter for _, parameter in auxiliary_named],
++            lr=auxiliary_lr if auxiliary_lr is not None else lr,
++            weight_decay=auxiliary_weight_decay if auxiliary_weight_decay is not None else weight_decay,
++            betas=betas,
++        )
++
++        self.param_groups = self.muon.param_groups + self.auxiliary.param_groups
++        self.state = _RoutedOptimizerState(
++            self.muon.state,
++            self.auxiliary.state,
++            (parameter for _, parameter in muon_named),
++        )
++        self.parameter_routes = {
++            "muon": tuple(name for name, _ in muon_named),
++            "auxiliary_adamw": tuple(name for name, _ in auxiliary_named),
++        }
++
++    @torch.no_grad()
++    def step(self, closure=None):
++        loss = self.muon.step(closure)
++        self.auxiliary.step()
++        return loss
++
++    def zero_grad(self, set_to_none: bool = True):
++        self.muon.zero_grad(set_to_none=set_to_none)
++        self.auxiliary.zero_grad(set_to_none=set_to_none)
++
++    def state_dict(self):
++        return {
++            "muon": self.muon.state_dict(),
++            "auxiliary_adamw": self.auxiliary.state_dict(),
++            "parameter_routes": self.parameter_routes,
++        }
++
++    def load_state_dict(self, state_dict):
++        if state_dict.get("parameter_routes") != self.parameter_routes:
++            raise ValueError("Optimizer parameter routing differs from the checkpoint")
++        self.muon.load_state_dict(state_dict["muon"])
++        self.auxiliary.load_state_dict(state_dict["auxiliary_adamw"])
++        self.param_groups = self.muon.param_groups + self.auxiliary.param_groups
++        self.state = _RoutedOptimizerState(
++            self.muon.state,
++            self.auxiliary.state,
++            self.muon.param_groups[0]["params"],
++        )
+diff --git a/verl/workers/config/optimizer.py b/verl/workers/config/optimizer.py
+index 47afdd3b..af12d9a1 100644
+--- a/verl/workers/config/optimizer.py
++++ b/verl/workers/config/optimizer.py
+@@ -13,7 +13,9 @@
+ # limitations under the License.
+ import warnings
+ from dataclasses import dataclass
+-from typing import Optional
++from typing import Iterable, Optional
++
++from torch import Tensor
+ 
+ from omegaconf import MISSING
+ 
+@@ -27,9 +29,28 @@ __all__ = [
+     "VeOmniOptimizerConfig",
+     "TorchtitanOptimizerConfig",
+     "AutomodelOptimizerConfig",
++    "partition_named_parameters_for_muon",
+ ]
+ 
+ 
++def partition_named_parameters_for_muon(
++    named_parameters: Iterable[tuple[str, Tensor]],
++) -> tuple[list[tuple[str, Tensor]], list[tuple[str, Tensor]]]:
++    """Split transformer parameters into Muon hidden matrices and AdamW auxiliaries.
++
++    Muon is restricted to two-dimensional attention and MLP weights. Embeddings,
++    output/value heads, norms, and biases remain on AdamW even when they are 2D.
++    """
++    muon_parameters = []
++    auxiliary_parameters = []
++    for name, parameter in named_parameters:
++        path = f".{name}."
++        is_hidden_matrix = parameter.ndim == 2 and (".self_attn." in path or ".mlp." in path)
++        target = muon_parameters if is_hidden_matrix else auxiliary_parameters
++        target.append((name, parameter))
++    return muon_parameters, auxiliary_parameters
++
++
+ @dataclass
+ class OptimizerConfig(BaseConfig):
+     """Base optimizer configuration.
+@@ -268,4 +289,12 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
+             f"Available optimizers: {dir(module)}"
+         ) from e
+ 
++    parameters = list(parameters)
++    has_named_parameters = bool(parameters) and isinstance(parameters[0], tuple)
++    if getattr(optimizer_cls, "requires_named_parameters", False):
++        if not has_named_parameters:
++            raise ValueError(f"Optimizer '{config.optimizer}' requires model.named_parameters()")
++    elif has_named_parameters:
++        parameters = [parameter for _, parameter in parameters]
++
+     return optimizer_cls(parameters, **optimizer_args)
+diff --git a/verl/workers/engine/fsdp/transformer_impl.py b/verl/workers/engine/fsdp/transformer_impl.py
+index 2c66c6a3..11c2bf54 100644
+--- a/verl/workers/engine/fsdp/transformer_impl.py
++++ b/verl/workers/engine/fsdp/transformer_impl.py
+@@ -451,7 +451,7 @@ class FSDPEngine(BaseEngine):
+     def _build_optimizer(self, module):
+         from verl.workers.config.optimizer import build_optimizer
+ 
+-        optimizer = build_optimizer(module.parameters(), self.optimizer_config)
++        optimizer = build_optimizer(module.named_parameters(), self.optimizer_config)
+ 
+         return optimizer
+ 
