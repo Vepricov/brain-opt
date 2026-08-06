@@ -27,12 +27,16 @@ write_status() {
 }
 finish() {
   local code=$1
+  local state
+  local timestamp
+  state=$([[ "$code" -eq 0 ]] && echo complete || echo failed)
+  timestamp=$(date -Is)
   printf '%s\n' "$code" > "$run_root/exit"
   printf '{"time":"%s","state":"%s","phase":"%s","seed":%s,"source_commit":"%s","exit":%s,"detail":"runner_exit=%s"}\n' \
-    "$(date -Is)" "$([[ "$code" -eq 0 ]] && echo complete || echo failed)" \
+    "$timestamp" "$state" \
     "$mode" "$seed" "$source_commit" "$code" "$code" > "$run_root/status.json"
-  printf 'RL_MUON_TERMINAL '
-  cat "$run_root/status.json"
+  printf 'RL_MUON_TERMINAL {"time":"%s","state":"%s","phase":"%s","seed":%s,"source_commit":"%s","exit":%s,"detail":"runner_exit=%s"}\n' \
+    "$timestamp" "$state" "$mode" "$seed" "$source_commit" "$code" "$code"
   tail -120 "$log"
   exit 0
 }

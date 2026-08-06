@@ -21,18 +21,21 @@ exec > >(tee -a "$log") 2>&1
 status=0
 export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r4
 export PATH="$PYTHONUSERBASE/bin:$PATH"
+export PIP_NO_CACHE_DIR=1
 finish() {
   local code=$1
+  local state
+  state=$([[ "$code" -eq 0 ]] && echo complete || echo failed)
   printf '%s\n' "$code" > "$state_root/exit"
   printf '{"state":"%s","phase":"bootstrap","seed":0,"source_commit":"%s","exit":%s}\n' \
-    "$([[ "$code" -eq 0 ]] && echo complete || echo failed)" "$source_commit" "$code" > "$state_root/status.json"
-  printf 'RL_MUON_TERMINAL '
-  cat "$state_root/status.json"
+    "$state" "$source_commit" "$code" > "$state_root/status.json"
+  printf 'RL_MUON_TERMINAL {"state":"%s","phase":"bootstrap","seed":0,"source_commit":"%s","exit":%s}\n' \
+    "$state" "$source_commit" "$code"
   tail -120 "$log"
   exit 0
 }
 
-python3 -m pip install --user \
+python3 -m pip install --user --no-cache-dir \
   -c "$repo_root/constraints-gsm8k-r4.txt" \
   -r "$repo_root/requirements-gsm8k.txt" || finish $?
 git clone https://github.com/verl-project/verl.git "$verl_root" || finish $?
