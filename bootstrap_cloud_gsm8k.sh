@@ -24,7 +24,8 @@ export PATH="$PYTHONUSERBASE/bin:$PATH"
 finish() {
   local code=$1
   printf '%s\n' "$code" > "$state_root/exit"
-  printf '{"state":"%s","exit":%s}\n' "$([[ "$code" -eq 0 ]] && echo complete || echo failed)" "$code" > "$state_root/status.json"
+  printf '{"state":"%s","phase":"bootstrap","seed":0,"source_commit":"%s","exit":%s}\n' \
+    "$([[ "$code" -eq 0 ]] && echo complete || echo failed)" "$source_commit" "$code" > "$state_root/status.json"
   printf 'RL_MUON_TERMINAL '
   cat "$state_root/status.json"
   tail -120 "$log"
