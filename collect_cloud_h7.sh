@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -u
-python - <<'PY'
+campaign_root=/home/jovyan/rl_muon/h7_online_cloud_r1
+collector_root="$campaign_root/collector"
+if ! mkdir "$collector_root"; then
+  echo "refusing duplicate collector endpoint: $collector_root"
+  exit 74
+fi
+payload_tmp="$collector_root/payload.json.tmp"
+status=0
+python - > "$payload_tmp" <<'PY' || status=$?
 import json
 from pathlib import Path
 
@@ -30,4 +38,17 @@ for seed in range(3):
     payload["seeds"][str(seed)] = seed_payload
 print(json.dumps(payload, sort_keys=True, allow_nan=False), flush=True)
 PY
+printf '%s\n' "$status" > "$collector_root/exit"
+if [[ "$status" -eq 0 ]]; then
+  mv "$payload_tmp" "$collector_root/payload.json"
+  printf '{"state":"complete"}\n' > "$collector_root/status.json.tmp"
+  mv "$collector_root/status.json.tmp" "$collector_root/status.json"
+  cat "$collector_root/payload.json"
+else
+  mv "$payload_tmp" "$collector_root/payload.failed.json"
+  printf '{"state":"failed","exit":%s}\n' "$status" > "$collector_root/status.json.tmp"
+  mv "$collector_root/status.json.tmp" "$collector_root/status.json"
+  echo "collector failed with scientific exit $status"
+fi
+# Preserve Cloud.ru logs. Scientific success is the durable collector status.
 exit 0
