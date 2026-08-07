@@ -21,7 +21,6 @@ exec > >(tee -a "$log") 2>&1
 status=0
 export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r4
 export PATH="$PYTHONUSERBASE/bin:$PATH"
-export PIP_NO_CACHE_DIR=1
 finish() {
   local code=$1
   local state
@@ -35,7 +34,7 @@ finish() {
   exit 0
 }
 
-python3 -m pip install --user --no-cache-dir \
+python3 -m pip install --user \
   -c "$repo_root/constraints-gsm8k-r4.txt" \
   -r "$repo_root/requirements-gsm8k.txt" || finish $?
 git clone https://github.com/verl-project/verl.git "$verl_root" || finish $?
