@@ -15,7 +15,12 @@ verl_root="$campaign_root/verl"
 venv_root="$campaign_root/venv"
 data_root="$campaign_root/data/gsm8k"
 model_root="$campaign_root/models/qwen2.5-0.5b-instruct"
-run_root="$campaign_root/${mode}_seed${seed}"
+attempt=${RL_MUON_ATTEMPT:-}
+if [[ -n "$attempt" && ! "$attempt" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+  echo "invalid attempt tag: $attempt"
+  exit 64
+fi
+run_root="$campaign_root/${mode}_seed${seed}${attempt:+_$attempt}"
 if ! mkdir "$run_root"; then
   echo "refusing duplicate run root: $run_root"
   exit 74
