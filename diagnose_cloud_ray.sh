@@ -49,6 +49,7 @@ temp_dir = sys.argv[1]
 print("calling ray.init", flush=True)
 context = ray.init(
     _temp_dir=temp_dir,
+    _node_ip_address="127.0.0.1",
     runtime_env={
         "env_vars": {
             "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
@@ -72,7 +73,7 @@ set -e
 
 printf '%s\n' "ray_probe_exit=$code"
 printf '%s\n' '-- ray logs --'
-find "$ray_tmp" -type f \( -name 'raylet.out' -o -name 'raylet.err' -o -name 'gcs_server.out' -o -name 'gcs_server.err' -o -name 'dashboard*.log' -o -name 'runtime_env*.log' \) -print0 2>/dev/null |
+find "$ray_tmp" -type f \( -name 'raylet.out' -o -name 'raylet.err' -o -name 'gcs_server.out' -o -name 'gcs_server.err' -o -name 'dashboard*' -o -name '*runtime_env*' \) -print0 2>/dev/null |
 while IFS= read -r -d '' path; do
   printf '\n===== %s =====\n' "$path"
   tail -n 160 "$path"
