@@ -9,6 +9,7 @@ source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
 campaign_root=${RL_MUON_CAMPAIGN_ROOT:?RL_MUON_CAMPAIGN_ROOT is required}
 state_root="$campaign_root/bootstrap"
 verl_root="$campaign_root/verl"
+venv_root="$campaign_root/venv"
 data_root="$campaign_root/data/gsm8k"
 model_root="$campaign_root/models/qwen2.5-0.5b-instruct"
 mkdir -p "$campaign_root"
@@ -19,8 +20,7 @@ fi
 log="$state_root/bootstrap.log"
 exec > >(tee -a "$log") 2>&1
 status=0
-export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r4
-export PATH="$PYTHONUSERBASE/bin:$PATH"
+export PIP_NO_CACHE_DIR=1
 finish() {
   local code=$1
   local state
@@ -34,18 +34,21 @@ finish() {
   exit 0
 }
 
-python3 -m pip install --user \
+python3 -m venv --system-site-packages "$venv_root" || finish $?
+export PATH="$venv_root/bin:$PATH"
+export PYTHONPATH="$repo_root"
+python3 -m pip install --no-cache-dir --ignore-installed \
   -c "$repo_root/constraints-gsm8k-r4.txt" \
   -r "$repo_root/requirements-gsm8k.txt" || finish $?
 git clone https://github.com/verl-project/verl.git "$verl_root" || finish $?
 git -C "$verl_root" checkout 7aed6b230776f963fa09509c10d9c3a767d1102c || finish $?
 git -C "$verl_root" apply "$repo_root/0001-feat-add-role-routed-Muon-optimizer-for-GSM8K-PPO.patch" || finish $?
-python3 -m pip install --user --no-deps -e "$verl_root" || finish $?
+python3 -m pip install --no-cache-dir --no-deps -e "$verl_root" || finish $?
 mkdir -p "$verl_root/tests/workers/config"
 cp "$repo_root/r4_muon_geometry_test.py" \
   "$verl_root/tests/workers/config/test_muon_optimizer_r4_geometry.py" || finish $?
 
-PYTHONPATH="$verl_root" python3 - <<'PY' || finish $?
+PYTHONPATH="$repo_root:$verl_root" python3 - <<'PY' || finish $?
 import json
 import platform
 import accelerate
@@ -85,7 +88,7 @@ if observed != expected:
 PY
 python3 -m pip check || finish $?
 python3 -m pip freeze > "$state_root/pip-freeze.txt" || finish $?
-PYTHONPATH="$verl_root" python3 -m pytest -q \
+PYTHONPATH="$repo_root:$verl_root" python3 -m pytest -q \
   -k 'not muon_backport_matches_pytorch_reference_step' \
   "$verl_root/tests/workers/config/test_muon_optimizer_on_cpu.py" \
   "$verl_root/tests/workers/config/test_muon_optimizer_r4_geometry.py" || finish $?

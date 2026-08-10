@@ -12,6 +12,7 @@ source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
 }
 campaign_root=${RL_MUON_CAMPAIGN_ROOT:?RL_MUON_CAMPAIGN_ROOT is required}
 verl_root="$campaign_root/verl"
+venv_root="$campaign_root/venv"
 data_root="$campaign_root/data/gsm8k"
 model_root="$campaign_root/models/qwen2.5-0.5b-instruct"
 run_root="$campaign_root/${mode}_seed${seed}"
@@ -50,12 +51,13 @@ while true; do
   sleep 15
 done
 
-export PYTHONPATH="$verl_root"
-export PYTHONUSERBASE=/home/jovyan/.local-gsm8k-vllm085-r4
-export PATH="$PYTHONUSERBASE/bin:$PATH"
+export PATH="$venv_root/bin:$PATH"
+export PYTHONPATH="$repo_root:$verl_root"
 export HF_HOME="$campaign_root/hf-cache"
 export TORCH_HOME="$campaign_root/torch-cache"
 export TOKENIZERS_PARALLELISM=false
+export VLLM_USE_V1=1
+export TRITON_LIBCUDA_PATH=/lib/x86_64-linux-gnu
 python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
 import hashlib
 import json
@@ -78,7 +80,7 @@ PY
 if [[ "$mode" == smoke ]]; then
   expected_step=1
   routes=(adam_adam muon_actor muon_critic)
-  extra_args=(trainer.total_training_steps=1 trainer.test_freq=1 trainer.save_freq=-1 data.train_batch_size=32 actor_rollout_ref.actor.ppo_mini_batch_size=16 critic.ppo_mini_batch_size=16)
+  extra_args=(trainer.total_training_steps=1 trainer.test_freq=1 trainer.save_freq=-1 data.train_batch_size=32 data.max_prompt_length=256 data.max_response_length=64 actor_rollout_ref.actor.ppo_mini_batch_size=16 critic.ppo_mini_batch_size=16)
 else
   expected_step=435
   routes=(adam_adam muon_actor muon_critic)
@@ -90,7 +92,10 @@ for route in "${routes[@]}"; do
   mkdir "$route_root" || finish $?
   write_status running "route=$route"
   ROUTE="$route" SEED="$seed" MODEL_PATH="$model_root" DATA_ROOT="$data_root" OUTPUT_ROOT="$route_root" \
-    bash "$verl_root/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh" "${extra_args[@]}" || finish $?
+    bash "$verl_root/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh" \
+      +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
+      +critic.model.override_config.attn_implementation=sdpa \
+      "${extra_args[@]}" || finish $?
   metrics=$(find "$route_root" -name metrics.jsonl -type f -print -quit)
   if [[ -z "$metrics" || ! -s "$metrics" ]]; then
     echo "missing metrics for route=$route"
