@@ -270,6 +270,8 @@ for route in "${routes[@]}"; do
     bash "$verl_root/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh" \
       +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
       +critic.model.override_config.attn_implementation=sdpa \
+      actor_rollout_ref.model.use_remove_padding=False \
+      critic.model.use_remove_padding=False \
       "${extra_args[@]}" || finish $?
   metrics=$(find "$route_root" -name metrics.jsonl -type f -print -quit)
   if [[ -z "$metrics" || ! -s "$metrics" ]]; then

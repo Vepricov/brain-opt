@@ -63,6 +63,12 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn('Version(tensordict.__version__) < Version("0.10")', runner)
         self.assertIn("from tensordict.tensorclass import NonTensorData, NonTensorStack", runner)
 
+    def test_runner_avoids_flash_attention_remove_padding_path(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+
+        self.assertIn("actor_rollout_ref.model.use_remove_padding=False", runner)
+        self.assertIn("critic.model.use_remove_padding=False", runner)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 
