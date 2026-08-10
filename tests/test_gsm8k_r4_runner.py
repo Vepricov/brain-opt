@@ -43,7 +43,8 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
 
         self.assertIn("vllm_async_server.py", runner)
         self.assertIn("fcntl.LOCK_EX", runner)
-        self.assertIn('source.replace(needle, "")', runner)
+        self.assertIn('replace(logprobs_needle, "")', runner)
+        self.assertIn('hasattr(engine_client, "reset_mm_cache")', runner)
         self.assertIn("compile(updated", runner)
 
     def test_scientific_result_requires_validation_endpoint_and_auc(self):

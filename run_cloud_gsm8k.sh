@@ -83,27 +83,41 @@ export TRITON_LIBCUDA_PATH=/lib/x86_64-linux-gnu
 python3 - "$campaign_root" "$verl_root/verl/workers/rollout/vllm_rollout/vllm_async_server.py" <<'PY' || finish $?
 import fcntl
 import os
+import re
 import sys
 from pathlib import Path
 
 campaign_root = Path(sys.argv[1])
 path = Path(sys.argv[2])
-needle = '            "logprobs_mode": self.config.logprobs_mode,\n'
+logprobs_needle = '            "logprobs_mode": self.config.logprobs_mode,\n'
+reset_pattern = re.compile(r"^        await engine_client\.reset_mm_cache\(\)\n", re.MULTILINE)
+reset_replacement = (
+    '        if hasattr(engine_client, "reset_mm_cache"):\n'
+    "            await engine_client.reset_mm_cache()\n"
+)
 lock_path = campaign_root / ".vllm085-compat.lock"
 with lock_path.open("w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     source = path.read_text()
-    count = source.count(needle)
-    if count == 1:
-        updated = source.replace(needle, "")
+    logprobs_count = source.count(logprobs_needle)
+    reset_count = len(reset_pattern.findall(source))
+    if logprobs_count not in (0, 1):
+        raise RuntimeError(f"unexpected logprobs_mode assignment count in {path}: {logprobs_count}")
+    if reset_count == 0 and reset_replacement not in source:
+        raise RuntimeError(f"missing expected reset_mm_cache call in {path}")
+    if reset_count not in (0, 1):
+        raise RuntimeError(f"unexpected reset_mm_cache call count in {path}: {reset_count}")
+    updated = reset_pattern.sub(reset_replacement, source.replace(logprobs_needle, ""))
+    if updated != source:
         compile(updated, str(path), "exec")
         temporary = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
         temporary.write_text(updated)
         os.replace(temporary, path)
-    elif count != 0:
-        raise RuntimeError(f"unexpected logprobs_mode assignment count in {path}: {count}")
-    if needle in path.read_text():
+    verified = path.read_text()
+    if logprobs_needle in verified:
         raise RuntimeError(f"failed to remove unsupported logprobs_mode from {path}")
+    if reset_replacement not in verified:
+        raise RuntimeError(f"failed to guard optional reset_mm_cache in {path}")
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
 python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
