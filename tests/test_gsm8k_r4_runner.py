@@ -78,6 +78,13 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn('if exc.name != "flash_attn"', runner)
         self.assertIn("compile(attention_updated", runner)
 
+    def test_full_run_disables_large_periodic_checkpoints(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+
+        full_branch = runner.split('if [[ "$mode" == smoke ]]', 1)[1]
+        full_branch = full_branch.split('for route in "${routes[@]}"', 1)[0]
+        self.assertIn('extra_args=(trainer.save_freq=-1)', full_branch)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 

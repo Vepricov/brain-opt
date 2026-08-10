@@ -290,7 +290,10 @@ if [[ "$mode" == smoke ]]; then
 else
   expected_step=435
   routes=(adam_adam muon_actor muon_critic)
-  extra_args=()
+  # Full FSDP actor+critic checkpoints are several GiB each.  Three seeds
+  # share the campaign home quota, so periodic saves exhaust it before the
+  # first route reaches step 50.  This experiment consumes metrics only.
+  extra_args=(trainer.save_freq=-1)
 fi
 
 for route in "${routes[@]}"; do
