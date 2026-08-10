@@ -9,41 +9,52 @@ for option in ("--logprobs_mode", "--logprobs-mode"):
         index = sys.argv.index(option)
         del sys.argv[index : index + 2]
 
-try:
-    import torch.utils._pytree as _pytree
+_CONTROL_PLANE_MARKERS = (
+    "/ray/dashboard/",
+    "/ray/_private/runtime_env/agent/",
+)
+_is_ray_control_plane = any(
+    marker in argument.replace("\\", "/")
+    for argument in sys.argv
+    for marker in _CONTROL_PLANE_MARKERS
+)
 
-    if not hasattr(_pytree, "register_pytree_node") and hasattr(_pytree, "_register_pytree_node"):
-        _pytree.register_pytree_node = _pytree._register_pytree_node
-except Exception:
-    pass
+if not _is_ray_control_plane:
+    try:
+        import torch.utils._pytree as _pytree
 
-try:
-    import vllm.entrypoints.cli.serve as _serve
+        if not hasattr(_pytree, "register_pytree_node") and hasattr(_pytree, "_register_pytree_node"):
+            _pytree.register_pytree_node = _pytree._register_pytree_node
+    except Exception:
+        pass
 
-    if not hasattr(_serve, "run_headless"):
-        import uvloop as _uvloop
-        from vllm.entrypoints.openai.api_server import run_server as _run_server
+    try:
+        import vllm.entrypoints.cli.serve as _serve
 
-        def run_headless(args):
-            _uvloop.run(_run_server(args))
+        if not hasattr(_serve, "run_headless"):
+            import uvloop as _uvloop
+            from vllm.entrypoints.openai.api_server import run_server as _run_server
 
-        _serve.run_headless = run_headless
-except Exception:
-    pass
+            def run_headless(args):
+                _uvloop.run(_run_server(args))
 
-try:
-    import ray as _ray
+            _serve.run_headless = run_headless
+    except Exception:
+        pass
 
-    _ray_init = _ray.init
+    try:
+        import ray as _ray
 
-    def _rl_muon_ray_init(*args, **kwargs):
-        runtime_env = kwargs.setdefault("runtime_env", {})
-        env_vars = runtime_env.setdefault("env_vars", {})
-        env_vars.setdefault("PYTHONPATH", os.environ.get("PYTHONPATH", ""))
-        env_vars.setdefault("VLLM_USE_V1", "1")
-        env_vars.setdefault("TRITON_LIBCUDA_PATH", "/lib/x86_64-linux-gnu")
-        return _ray_init(*args, **kwargs)
+        _ray_init = _ray.init
 
-    _ray.init = _rl_muon_ray_init
-except Exception:
-    pass
+        def _rl_muon_ray_init(*args, **kwargs):
+            runtime_env = kwargs.setdefault("runtime_env", {})
+            env_vars = runtime_env.setdefault("env_vars", {})
+            env_vars.setdefault("PYTHONPATH", os.environ.get("PYTHONPATH", ""))
+            env_vars.setdefault("VLLM_USE_V1", "1")
+            env_vars.setdefault("TRITON_LIBCUDA_PATH", "/lib/x86_64-linux-gnu")
+            return _ray_init(*args, **kwargs)
+
+        _ray.init = _rl_muon_ray_init
+    except Exception:
+        pass
