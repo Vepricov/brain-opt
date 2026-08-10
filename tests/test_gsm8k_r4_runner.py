@@ -25,6 +25,13 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertNotIn("printf 'RL_MUON_TERMINAL '\n  cat", bootstrap)
         self.assertNotIn("printf 'RL_MUON_TERMINAL '\n  cat", runner)
 
+    def test_runner_emits_heartbeat_during_silent_model_startup(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+
+        self.assertIn("RL_MUON_HEARTBEAT", runner)
+        self.assertIn("while sleep 60", runner)
+        self.assertIn('kill "$heartbeat_pid"', runner)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 

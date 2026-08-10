@@ -27,6 +27,15 @@ if ! mkdir "$run_root"; then
 fi
 log="$run_root/cloud_runner.log"
 exec > >(tee -a "$log") 2>&1
+heartbeat_pid=
+heartbeat() {
+  while sleep 60; do
+    printf 'RL_MUON_HEARTBEAT time=%s mode=%s seed=%s elapsed=%ss\n' \
+      "$(date -Is)" "$mode" "$seed" "$SECONDS"
+  done
+}
+heartbeat &
+heartbeat_pid=$!
 write_status() {
   printf '{"time":"%s","state":"%s","mode":"%s","seed":%s,"detail":"%s"}\n' \
     "$(date -Is)" "$1" "$mode" "$seed" "$2" > "$run_root/status.json"
@@ -35,6 +44,11 @@ finish() {
   local code=$1
   local state
   local timestamp
+  if [[ -n "$heartbeat_pid" ]]; then
+    kill "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+    heartbeat_pid=
+  fi
   state=$([[ "$code" -eq 0 ]] && echo complete || echo failed)
   timestamp=$(date -Is)
   printf '%s\n' "$code" > "$run_root/exit"
