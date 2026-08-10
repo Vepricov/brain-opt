@@ -80,7 +80,9 @@ export TRITON_LIBCUDA_PATH=/lib/x86_64-linux-gnu
 # A reused campaign may have been bootstrapped by a source commit predating the
 # vLLM 0.8 compatibility patch. Patch that installed snapshot under a lock so
 # retries and concurrently queued seeds remain safe without rebuilding the venv.
-python3 - "$campaign_root" "$verl_root/verl/workers/rollout/vllm_rollout/vllm_async_server.py" <<'PY' || finish $?
+python3 - "$campaign_root" \
+  "$verl_root/verl/workers/rollout/vllm_rollout/vllm_async_server.py" \
+  "$verl_root/verl/workers/rollout/vllm_rollout/utils.py" <<'PY' || finish $?
 import fcntl
 import os
 import re
@@ -89,6 +91,7 @@ from pathlib import Path
 
 campaign_root = Path(sys.argv[1])
 path = Path(sys.argv[2])
+weight_utils_path = Path(sys.argv[3])
 logprobs_needle = '            "logprobs_mode": self.config.logprobs_mode,\n'
 reset_pattern = re.compile(r"^        await engine_client\.reset_mm_cache\(\)\n", re.MULTILINE)
 reset_replacement = (
@@ -136,6 +139,35 @@ with lock_path.open("w") as lock:
         raise RuntimeError(f"failed to guard optional reset_mm_cache in {path}")
     if drain_replacement not in verified:
         raise RuntimeError(f"failed to guard optional wait_for_requests_to_drain in {path}")
+    weight_source = weight_utils_path.read_text()
+    public_import_pattern = re.compile(
+        r"^            from vllm\.model_executor\.model_loader\.utils import "
+        r"process_weights_after_loading\n",
+        re.MULTILINE,
+    )
+    compatible_import = (
+        "            try:\n"
+        "                from vllm.model_executor.model_loader.utils import process_weights_after_loading\n"
+        "            except ImportError:\n"
+        "                from vllm.model_executor.model_loader.loader import (\n"
+        "                    _process_weights_after_loading as process_weights_after_loading,\n"
+        "                )\n"
+    )
+    public_count = len(public_import_pattern.findall(weight_source))
+    if public_count == 0 and compatible_import not in weight_source:
+        raise RuntimeError(f"missing expected process_weights_after_loading import in {weight_utils_path}")
+    if public_count not in (0, 1):
+        raise RuntimeError(
+            f"unexpected process_weights_after_loading import count in {weight_utils_path}: {public_count}"
+        )
+    weight_updated = public_import_pattern.sub(compatible_import, weight_source)
+    if weight_updated != weight_source:
+        compile(weight_updated, str(weight_utils_path), "exec")
+        temporary = weight_utils_path.with_suffix(weight_utils_path.suffix + f".tmp.{os.getpid()}")
+        temporary.write_text(weight_updated)
+        os.replace(temporary, weight_utils_path)
+    if compatible_import not in weight_utils_path.read_text():
+        raise RuntimeError(f"failed to add vLLM 0.8 weight post-processing fallback in {weight_utils_path}")
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
 python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?

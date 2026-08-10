@@ -47,6 +47,8 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn('hasattr(engine_client, "reset_mm_cache")', runner)
         self.assertIn('getattr(self.engine, "wait_for_requests_to_drain", None)', runner)
         self.assertIn("self.engine.output_processor.request_states", runner)
+        self.assertIn("_process_weights_after_loading as process_weights_after_loading", runner)
+        self.assertIn("weight_utils_path", runner)
         self.assertIn("compile(updated", runner)
 
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
