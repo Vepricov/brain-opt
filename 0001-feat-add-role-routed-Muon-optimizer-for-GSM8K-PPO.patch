@@ -7,10 +7,11 @@ Subject: [PATCH] feat: add role-routed Muon optimizer for GSM8K PPO
  examples/data_preprocess/gsm8k.py             |   3 +-
  ...n_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh | 101 +++++++++
  .../config/test_muon_optimizer_on_cpu.py      |  88 ++++++++
+ verl/utils/model.py                           |   7 +-
  verl/utils/optimizers.py                      | 208 ++++++++++++++++++
  verl/workers/config/optimizer.py              |  31 ++-
  verl/workers/engine/fsdp/transformer_impl.py  |   2 +-
- 6 files changed, 430 insertions(+), 3 deletions(-)
+ 7 files changed, 435 insertions(+), 5 deletions(-)
  create mode 100644 examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh
  create mode 100644 tests/workers/config/test_muon_optimizer_on_cpu.py
  create mode 100644 verl/utils/optimizers.py
@@ -520,4 +521,29 @@ index 2c66c6a3..11c2bf54 100644
 +        optimizer = build_optimizer(module.named_parameters(), self.optimizer_config)
  
          return optimizer
- 
+
+diff --git a/verl/utils/model.py b/verl/utils/model.py
+index c621eb12..237890b4 100644
+--- a/verl/utils/model.py
++++ b/verl/utils/model.py
+@@ -642,7 +642,10 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
+             pretrained_model_name_or_path=local_path,
+             torch_dtype=torch_dtype,
+             config=model_config,
+-            attn_implementation="flash_attention_2",
++            # The pinned campaign does not ship flash-attn. SDPA is available
++            # in its PyTorch build and avoids turning a backend ImportError into
++            # the misleading "install trl" value-head fallback below.
++            attn_implementation="sdpa",
+             trust_remote_code=trust_remote_code,
+         )
+         return model
+@@ -664,7 +667,7 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
+         pretrained_model_name_or_path=local_path,
+         torch_dtype=torch_dtype,
+         config=model_config,
+-        attn_implementation="flash_attention_2",
++        attn_implementation="sdpa",
+         trust_remote_code=trust_remote_code,
+     )
+     # vlm models
