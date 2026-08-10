@@ -32,6 +32,12 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn("while sleep 60", runner)
         self.assertIn('kill "$heartbeat_pid"', runner)
 
+    def test_verl_patch_omits_unsupported_vllm_085_logprobs_mode(self):
+        patch = (ROOT / "0001-feat-add-role-routed-Muon-optimizer-for-GSM8K-PPO.patch").read_text()
+
+        self.assertIn('if _VLLM_VERSION >= version.parse("0.9.0"):', patch)
+        self.assertIn('args["logprobs_mode"] = self.config.logprobs_mode', patch)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 

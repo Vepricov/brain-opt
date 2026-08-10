@@ -1,21 +1,3 @@
-From 899975c2e7e5827724a93154b03a1b7f8d756fd7 Mon Sep 17 00:00:00 2001
-From: vepricov <veprikov.as@phystech.edu>
-Date: Thu, 6 Aug 2026 13:16:01 +0300
-Subject: [PATCH] feat: add role-routed Muon optimizer for GSM8K PPO
-
----
- examples/data_preprocess/gsm8k.py             |   3 +-
- ...n_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh | 101 +++++++++
- .../config/test_muon_optimizer_on_cpu.py      |  88 ++++++++
- verl/utils/model.py                           |   7 +-
- verl/utils/optimizers.py                      | 208 ++++++++++++++++++
- verl/workers/config/optimizer.py              |  31 ++-
- verl/workers/engine/fsdp/transformer_impl.py  |   2 +-
- 7 files changed, 435 insertions(+), 5 deletions(-)
- create mode 100644 examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh
- create mode 100644 tests/workers/config/test_muon_optimizer_on_cpu.py
- create mode 100644 verl/utils/optimizers.py
-
 diff --git a/examples/data_preprocess/gsm8k.py b/examples/data_preprocess/gsm8k.py
 index 1656cdbc..65023595 100644
 --- a/examples/data_preprocess/gsm8k.py
@@ -238,6 +220,31 @@ index 00000000..31c3a6bc
 +    restored = build_optimizer(model.named_parameters(), config)
 +    restored.load_state_dict(checkpoint)
 +    assert restored.state_dict()["parameter_routes"] == checkpoint["parameter_routes"]
+diff --git a/verl/utils/model.py b/verl/utils/model.py
+index c621eb12..237890b4 100644
+--- a/verl/utils/model.py
++++ b/verl/utils/model.py
+@@ -642,7 +642,10 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
+             pretrained_model_name_or_path=local_path,
+             torch_dtype=torch_dtype,
+             config=model_config,
+-            attn_implementation="flash_attention_2",
++            # The pinned campaign does not ship flash-attn. SDPA is available
++            # in its PyTorch build and avoids turning a backend ImportError into
++            # the misleading "install trl" value-head fallback below.
++            attn_implementation="sdpa",
+             trust_remote_code=trust_remote_code,
+         )
+         return model
+@@ -664,7 +667,7 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
+         pretrained_model_name_or_path=local_path,
+         torch_dtype=torch_dtype,
+         config=model_config,
+-        attn_implementation="flash_attention_2",
++        attn_implementation="sdpa",
+         trust_remote_code=trust_remote_code,
+     )
+     # vlm models
 diff --git a/verl/utils/optimizers.py b/verl/utils/optimizers.py
 new file mode 100644
 index 00000000..dc7bb9cf
@@ -521,29 +528,29 @@ index 2c66c6a3..11c2bf54 100644
 +        optimizer = build_optimizer(module.named_parameters(), self.optimizer_config)
  
          return optimizer
-
-diff --git a/verl/utils/model.py b/verl/utils/model.py
-index c621eb12..237890b4 100644
---- a/verl/utils/model.py
-+++ b/verl/utils/model.py
-@@ -642,7 +642,10 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
-             pretrained_model_name_or_path=local_path,
-             torch_dtype=torch_dtype,
-             config=model_config,
--            attn_implementation="flash_attention_2",
-+            # The pinned campaign does not ship flash-attn. SDPA is available
-+            # in its PyTorch build and avoids turning a backend ImportError into
-+            # the misleading "install trl" value-head fallback below.
-+            attn_implementation="sdpa",
-             trust_remote_code=trust_remote_code,
-         )
-         return model
-@@ -664,7 +667,7 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
-         pretrained_model_name_or_path=local_path,
-         torch_dtype=torch_dtype,
-         config=model_config,
--        attn_implementation="flash_attention_2",
-+        attn_implementation="sdpa",
-         trust_remote_code=trust_remote_code,
-     )
-     # vlm models
+ 
+diff --git a/verl/workers/rollout/vllm_rollout/vllm_async_server.py b/verl/workers/rollout/vllm_rollout/vllm_async_server.py
+index d4194e1c..619effa6 100644
+--- a/verl/workers/rollout/vllm_rollout/vllm_async_server.py
++++ b/verl/workers/rollout/vllm_rollout/vllm_async_server.py
+@@ -263,7 +263,6 @@ class vLLMHttpServer:
+             "max_num_batched_tokens": self.config.max_num_batched_tokens,
+             "enable_prefix_caching": self.config.enable_prefix_caching,
+             "enable_sleep_mode": self.config.enable_sleep_mode,
+-            "logprobs_mode": self.config.logprobs_mode,
+             "enforce_eager": self.config.enforce_eager,
+             "gpu_memory_utilization": self.config.gpu_memory_utilization,
+             "disable_log_stats": self.config.disable_log_stats,
+@@ -277,6 +276,12 @@ class vLLMHttpServer:
+             **engine_kwargs,
+         }
+ 
++        # vLLM 0.8.x predates the --logprobs-mode CLI option. Its existing
++        # behavior corresponds to VERL's processed_logprobs default, so omit
++        # the option on that pinned runtime instead of failing argument parse.
++        if _VLLM_VERSION >= version.parse("0.9.0"):
++            args["logprobs_mode"] = self.config.logprobs_mode
++
+         # update profiler args
+         profiler_args = build_vllm_profiler_args(
+             self.profiler_controller.config, self.profiler_controller.tool_config, self.replica_rank
