@@ -107,6 +107,14 @@ drain_replacement = (
     "            while self.engine.output_processor.request_states:\n"
     "                await asyncio.sleep(0.01)\n"
 )
+empty_multimodal_prompt = (
+    '        prompt_kwargs = {"prompt_token_ids": prompt_ids, "multi_modal_data": multi_modal_data}\n'
+)
+compatible_multimodal_prompt = (
+    '        prompt_kwargs = {"prompt_token_ids": prompt_ids}\n'
+    "        if multi_modal_data:\n"
+    '            prompt_kwargs["multi_modal_data"] = multi_modal_data\n'
+)
 lock_path = campaign_root / ".vllm085-compat.lock"
 with lock_path.open("w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
@@ -124,9 +132,15 @@ with lock_path.open("w") as lock:
         raise RuntimeError(f"missing expected wait_for_requests_to_drain call in {path}")
     if drain_count not in (0, 1):
         raise RuntimeError(f"unexpected wait_for_requests_to_drain call count in {path}: {drain_count}")
+    multimodal_count = source.count(empty_multimodal_prompt)
+    if multimodal_count == 0 and compatible_multimodal_prompt not in source:
+        raise RuntimeError(f"missing expected multi_modal_data prompt construction in {path}")
+    if multimodal_count not in (0, 1):
+        raise RuntimeError(f"unexpected multi_modal_data prompt count in {path}: {multimodal_count}")
     updated = source.replace(logprobs_needle, "")
     updated = reset_pattern.sub(reset_replacement, updated)
     updated = drain_pattern.sub(drain_replacement, updated)
+    updated = updated.replace(empty_multimodal_prompt, compatible_multimodal_prompt)
     if updated != source:
         compile(updated, str(path), "exec")
         temporary = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
@@ -139,6 +153,8 @@ with lock_path.open("w") as lock:
         raise RuntimeError(f"failed to guard optional reset_mm_cache in {path}")
     if drain_replacement not in verified:
         raise RuntimeError(f"failed to guard optional wait_for_requests_to_drain in {path}")
+    if compatible_multimodal_prompt not in verified:
+        raise RuntimeError(f"failed to omit empty multi_modal_data for vLLM 0.8 in {path}")
     weight_source = weight_utils_path.read_text()
     public_import_pattern = re.compile(
         r"^            from vllm\.model_executor\.model_loader\.utils import "

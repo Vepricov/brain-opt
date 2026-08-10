@@ -48,6 +48,8 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn('getattr(self.engine, "wait_for_requests_to_drain", None)', runner)
         self.assertIn("self.engine.output_processor.request_states", runner)
         self.assertIn("_process_weights_after_loading as process_weights_after_loading", runner)
+        self.assertIn('if multi_modal_data:', runner)
+        self.assertIn('prompt_kwargs["multi_modal_data"] = multi_modal_data', runner)
         self.assertIn("weight_utils_path", runner)
         self.assertIn("compile(updated", runner)
 
