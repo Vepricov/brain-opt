@@ -95,19 +95,35 @@ reset_replacement = (
     '        if hasattr(engine_client, "reset_mm_cache"):\n'
     "            await engine_client.reset_mm_cache()\n"
 )
+drain_pattern = re.compile(r"^        await self\.engine\.wait_for_requests_to_drain\(\)\n", re.MULTILINE)
+drain_replacement = (
+    '        drain = getattr(self.engine, "wait_for_requests_to_drain", None)\n'
+    "        if drain is not None:\n"
+    "            await drain()\n"
+    "        else:\n"
+    "            while self.engine.output_processor.request_states:\n"
+    "                await asyncio.sleep(0.01)\n"
+)
 lock_path = campaign_root / ".vllm085-compat.lock"
 with lock_path.open("w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     source = path.read_text()
     logprobs_count = source.count(logprobs_needle)
     reset_count = len(reset_pattern.findall(source))
+    drain_count = len(drain_pattern.findall(source))
     if logprobs_count not in (0, 1):
         raise RuntimeError(f"unexpected logprobs_mode assignment count in {path}: {logprobs_count}")
     if reset_count == 0 and reset_replacement not in source:
         raise RuntimeError(f"missing expected reset_mm_cache call in {path}")
     if reset_count not in (0, 1):
         raise RuntimeError(f"unexpected reset_mm_cache call count in {path}: {reset_count}")
-    updated = reset_pattern.sub(reset_replacement, source.replace(logprobs_needle, ""))
+    if drain_count == 0 and drain_replacement not in source:
+        raise RuntimeError(f"missing expected wait_for_requests_to_drain call in {path}")
+    if drain_count not in (0, 1):
+        raise RuntimeError(f"unexpected wait_for_requests_to_drain call count in {path}: {drain_count}")
+    updated = source.replace(logprobs_needle, "")
+    updated = reset_pattern.sub(reset_replacement, updated)
+    updated = drain_pattern.sub(drain_replacement, updated)
     if updated != source:
         compile(updated, str(path), "exec")
         temporary = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
@@ -118,6 +134,8 @@ with lock_path.open("w") as lock:
         raise RuntimeError(f"failed to remove unsupported logprobs_mode from {path}")
     if reset_replacement not in verified:
         raise RuntimeError(f"failed to guard optional reset_mm_cache in {path}")
+    if drain_replacement not in verified:
+        raise RuntimeError(f"failed to guard optional wait_for_requests_to_drain in {path}")
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
 python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?

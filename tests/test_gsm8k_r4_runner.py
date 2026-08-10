@@ -45,6 +45,8 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn("fcntl.LOCK_EX", runner)
         self.assertIn('replace(logprobs_needle, "")', runner)
         self.assertIn('hasattr(engine_client, "reset_mm_cache")', runner)
+        self.assertIn('getattr(self.engine, "wait_for_requests_to_drain", None)', runner)
+        self.assertIn("self.engine.output_processor.request_states", runner)
         self.assertIn("compile(updated", runner)
 
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
