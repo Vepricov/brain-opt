@@ -10,7 +10,8 @@ source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
 campaign_root=${RL_MUON_CAMPAIGN_ROOT:?RL_MUON_CAMPAIGN_ROOT is required}
 venv_root="$campaign_root/venv"
 diag_root="$campaign_root/ray-diagnostic-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-mkdir -p "$diag_root/ray-tmp" || exit $?
+ray_tmp="/tmp/rlm-ray-$$"
+mkdir -p "$diag_root" "$ray_tmp" || exit $?
 log="$diag_root/diagnostic.log"
 exec > >(tee -a "$log") 2>&1
 
@@ -18,7 +19,7 @@ export PATH="$venv_root/bin:$PATH"
 export PYTHONPATH="$repo_root:$campaign_root/verl"
 export VLLM_USE_V1=1
 export TRITON_LIBCUDA_PATH=/lib/x86_64-linux-gnu
-export RAY_TMPDIR="$diag_root/ray-tmp"
+export RAY_TMPDIR="$ray_tmp"
 
 printf '%s\n' '-- limits --'
 ulimit -a
@@ -39,7 +40,7 @@ print({"python": platform.python_version(), "ray": ray.__version__, "RAY_TMPDIR"
 PY
 
 set +e
-python3 - "$diag_root/ray-tmp" <<'PY'
+python3 - "$ray_tmp" <<'PY'
 import os
 import sys
 import ray
@@ -71,7 +72,7 @@ set -e
 
 printf '%s\n' "ray_probe_exit=$code"
 printf '%s\n' '-- ray logs --'
-find "$diag_root/ray-tmp" -type f \( -name 'raylet.out' -o -name 'raylet.err' -o -name 'gcs_server.out' -o -name 'gcs_server.err' -o -name 'dashboard*.log' -o -name 'runtime_env*.log' \) -print0 2>/dev/null |
+find "$ray_tmp" -type f \( -name 'raylet.out' -o -name 'raylet.err' -o -name 'gcs_server.out' -o -name 'gcs_server.err' -o -name 'dashboard*.log' -o -name 'runtime_env*.log' \) -print0 2>/dev/null |
 while IFS= read -r -d '' path; do
   printf '\n===== %s =====\n' "$path"
   tail -n 160 "$path"
