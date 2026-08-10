@@ -38,6 +38,14 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn('if _VLLM_VERSION >= version.parse("0.9.0"):', patch)
         self.assertIn('args["logprobs_mode"] = self.config.logprobs_mode', patch)
 
+    def test_runner_repairs_reused_campaign_vllm_argv_under_lock(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+
+        self.assertIn("vllm_async_server.py", runner)
+        self.assertIn("fcntl.LOCK_EX", runner)
+        self.assertIn('source.replace(needle, "")', runner)
+        self.assertIn("compile(updated", runner)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 
