@@ -69,6 +69,15 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn("actor_rollout_ref.model.use_remove_padding=False", runner)
         self.assertIn("critic.model.use_remove_padding=False", runner)
 
+    def test_runner_repairs_trainer_padding_helpers_without_flash_attention(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+
+        self.assertIn("attention_utils.py", runner)
+        self.assertIn("compatible_attention_import", runner)
+        self.assertIn("from verl.utils.npu_flash_attn_utils import", runner)
+        self.assertIn('if exc.name != "flash_attn"', runner)
+        self.assertIn("compile(attention_updated", runner)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 

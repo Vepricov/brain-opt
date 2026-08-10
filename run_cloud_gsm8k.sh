@@ -129,7 +129,8 @@ PY
 # retries and concurrently queued seeds remain safe without rebuilding the venv.
 python3 - "$campaign_root" \
   "$verl_root/verl/workers/rollout/vllm_rollout/vllm_async_server.py" \
-  "$verl_root/verl/workers/rollout/vllm_rollout/utils.py" <<'PY' || finish $?
+  "$verl_root/verl/workers/rollout/vllm_rollout/utils.py" \
+  "$verl_root/verl/utils/attention_utils.py" <<'PY' || finish $?
 import fcntl
 import os
 import re
@@ -139,6 +140,7 @@ from pathlib import Path
 campaign_root = Path(sys.argv[1])
 path = Path(sys.argv[2])
 weight_utils_path = Path(sys.argv[3])
+attention_utils_path = Path(sys.argv[4])
 logprobs_needle = '            "logprobs_mode": self.config.logprobs_mode,\n'
 reset_pattern = re.compile(r"^        await engine_client\.reset_mm_cache\(\)\n", re.MULTILINE)
 reset_replacement = (
@@ -161,6 +163,19 @@ compatible_multimodal_prompt = (
     '        prompt_kwargs = {"prompt_token_ids": prompt_ids}\n'
     "        if multi_modal_data:\n"
     '            prompt_kwargs["multi_modal_data"] = multi_modal_data\n'
+)
+flash_attention_import = (
+    "    else:\n"
+    "        from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input\n"
+)
+compatible_attention_import = (
+    "    else:\n"
+    "        try:\n"
+    "            from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input\n"
+    "        except ModuleNotFoundError as exc:\n"
+    '            if exc.name != "flash_attn":\n'
+    "                raise\n"
+    "            from verl.utils.npu_flash_attn_utils import index_first_axis, pad_input, rearrange, unpad_input\n"
 )
 lock_path = campaign_root / ".vllm085-compat.lock"
 with lock_path.open("w") as lock:
@@ -231,6 +246,22 @@ with lock_path.open("w") as lock:
         os.replace(temporary, weight_utils_path)
     if compatible_import not in weight_utils_path.read_text():
         raise RuntimeError(f"failed to add vLLM 0.8 weight post-processing fallback in {weight_utils_path}")
+    attention_source = attention_utils_path.read_text()
+    flash_attention_count = attention_source.count(flash_attention_import)
+    if flash_attention_count == 0 and compatible_attention_import not in attention_source:
+        raise RuntimeError(f"missing expected FlashAttention import in {attention_utils_path}")
+    if flash_attention_count not in (0, 1):
+        raise RuntimeError(
+            f"unexpected FlashAttention import count in {attention_utils_path}: {flash_attention_count}"
+        )
+    attention_updated = attention_source.replace(flash_attention_import, compatible_attention_import)
+    if attention_updated != attention_source:
+        compile(attention_updated, str(attention_utils_path), "exec")
+        temporary = attention_utils_path.with_suffix(attention_utils_path.suffix + f".tmp.{os.getpid()}")
+        temporary.write_text(attention_updated)
+        os.replace(temporary, attention_utils_path)
+    if compatible_attention_import not in attention_utils_path.read_text():
+        raise RuntimeError(f"failed to add pure-PyTorch padding fallback in {attention_utils_path}")
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
 python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
