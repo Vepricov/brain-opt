@@ -77,6 +77,53 @@ export TORCH_HOME="$campaign_root/torch-cache"
 export TOKENIZERS_PARALLELISM=false
 export VLLM_USE_V1=1
 export TRITON_LIBCUDA_PATH=/lib/x86_64-linux-gnu
+# The pinned VERL snapshot now calls DataProto.to_tensordict(), whose
+# NonTensorStack conversion is only available with tensordict >= 0.10.  Older
+# campaigns were built with 0.8.3, so repair a reused venv once under a lock.
+python3 - "$campaign_root" <<'PY' || finish $?
+import fcntl
+import importlib.metadata
+import subprocess
+import sys
+from pathlib import Path
+
+from packaging.version import Version
+
+campaign_root = Path(sys.argv[1])
+lock_path = campaign_root / ".tensordict010-compat.lock"
+with lock_path.open("w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        installed = Version(importlib.metadata.version("tensordict"))
+    except importlib.metadata.PackageNotFoundError:
+        installed = Version("0")
+    if installed < Version("0.10"):
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-cache-dir",
+                "--no-deps",
+                "--upgrade",
+                "tensordict==0.10.0",
+                "pyvers==0.1.0",
+            ],
+            check=True,
+        )
+    import tensordict
+
+    if Version(tensordict.__version__) < Version("0.10"):
+        raise RuntimeError(f"tensordict upgrade did not take effect: {tensordict.__version__}")
+    from tensordict.tensorclass import NonTensorData, NonTensorStack
+
+    print(
+        f"verified tensordict compatibility: {tensordict.__version__} "
+        f"({NonTensorData.__name__}, {NonTensorStack.__name__})",
+        flush=True,
+    )
+PY
 # A reused campaign may have been bootstrapped by a source commit predating the
 # vLLM 0.8 compatibility patch. Patch that installed snapshot under a lock so
 # retries and concurrently queued seeds remain safe without rebuilding the venv.

@@ -53,6 +53,16 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertIn("weight_utils_path", runner)
         self.assertIn("compile(updated", runner)
 
+    def test_runner_repairs_reused_campaign_tensordict_version_under_lock(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+        requirements = (ROOT / "requirements-gsm8k.txt").read_text()
+
+        self.assertIn("tensordict==0.10.0", requirements)
+        self.assertIn("pyvers==0.1.0", requirements)
+        self.assertIn('.tensordict010-compat.lock', runner)
+        self.assertIn('Version(tensordict.__version__) < Version("0.10")', runner)
+        self.assertIn("from tensordict.tensorclass import NonTensorData, NonTensorStack", runner)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 
