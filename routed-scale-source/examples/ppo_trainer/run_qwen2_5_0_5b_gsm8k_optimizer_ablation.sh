@@ -3,11 +3,12 @@
 
 set -euo pipefail
 
-ROUTE=${ROUTE:?Set ROUTE to adam_adam, muon_actor, muon_critic, routed_scale_adam_actor, or rms_matched_momentum_actor}
+ROUTE=${ROUTE:?Set a supported optimizer route}
 SEED=${SEED:?Set SEED to the paired run seed}
 MODEL_PATH=${MODEL_PATH:?Set MODEL_PATH to the pinned local model snapshot}
 DATA_ROOT=${DATA_ROOT:?Set DATA_ROOT to the prepared GSM8K directory}
 OUTPUT_ROOT=${OUTPUT_ROOT:?Set OUTPUT_ROOT to a persistent output directory}
+ACTOR_LR=1e-6
 
 case "$ROUTE" in
     adam_adam)
@@ -50,6 +51,24 @@ case "$ROUTE" in
         CRITIC_OPT_IMPL=torch.optim
         CRITIC_OPT_OVERRIDE=null
         ;;
+    lion_actor_adam_critic)
+        ACTOR_OPT=Lion
+        ACTOR_OPT_IMPL=verl.utils.optimizers
+        ACTOR_OPT_OVERRIDE='{betas: [0.9, 0.99]}'
+        ACTOR_LR=${LION_ACTOR_LR:?Set LION_ACTOR_LR to the frozen calibrated learning rate}
+        CRITIC_OPT=AdamW
+        CRITIC_OPT_IMPL=torch.optim
+        CRITIC_OPT_OVERRIDE=null
+        ;;
+    lion_actor_muon_critic)
+        ACTOR_OPT=Lion
+        ACTOR_OPT_IMPL=verl.utils.optimizers
+        ACTOR_OPT_OVERRIDE='{betas: [0.9, 0.99]}'
+        ACTOR_LR=${LION_ACTOR_LR:?Set LION_ACTOR_LR to the frozen calibrated learning rate}
+        CRITIC_OPT=MuonWithAuxAdamW
+        CRITIC_OPT_IMPL=verl.utils.optimizers
+        CRITIC_OPT_OVERRIDE='{muon_adjust_lr_fn: match_rms_adamw}'
+        ;;
     *)
         echo "Unsupported ROUTE=$ROUTE" >&2
         exit 2
@@ -78,7 +97,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.optimizer="$ACTOR_OPT" \
     actor_rollout_ref.actor.optim.optimizer_impl="$ACTOR_OPT_IMPL" \
-    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr="$ACTOR_LR" \
     actor_rollout_ref.actor.optim.weight_decay=0.01 \
     actor_rollout_ref.actor.optim.override_optimizer_config="$ACTOR_OPT_OVERRIDE" \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \

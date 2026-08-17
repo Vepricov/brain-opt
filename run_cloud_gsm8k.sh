@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -u
-mode=${1:?mode is required: smoke, full, routed-smoke, routed-full, momentum-smoke, or momentum-full}
+mode=${1:?mode is required}
 seed=${2:?seed is required}
-case "$mode" in smoke|full|routed-smoke|routed-full|momentum-smoke|momentum-full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
+case "$mode" in smoke|full|routed-smoke|routed-full|momentum-smoke|momentum-full|lion-calibration|lion-smoke|lion-full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
 case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
 source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
@@ -20,6 +20,8 @@ if [[ -n "$attempt" && ! "$attempt" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
   echo "invalid attempt tag: $attempt"
   exit 64
 fi
+lion_lr=${RL_MUON_LION_LR:-}
+lion_calibration_sha256=${RL_MUON_LION_CALIBRATION_SHA256:-}
 run_root="$campaign_root/${mode}_seed${seed}${attempt:+_$attempt}"
 if ! mkdir "$run_root"; then
   echo "refusing duplicate run root: $run_root"
@@ -86,6 +88,19 @@ if [[ $(command -v python3) != "$venv_python" ]]; then
   printf 'campaign venv is not first on PATH: expected=%s actual=%s\n' \
     "$venv_python" "$(command -v python3)"
   finish 79
+fi
+if [[ "$mode" == lion-smoke || "$mode" == lion-full ]]; then
+  "$venv_python" - "$lion_lr" "$lion_calibration_sha256" <<'PY' || finish 64
+import re, sys
+try:
+    learning_rate = float(sys.argv[1])
+except ValueError as error:
+    raise SystemExit(f"invalid RL_MUON_LION_LR: {sys.argv[1]!r}") from error
+if not learning_rate > 0:
+    raise SystemExit("RL_MUON_LION_LR must be positive")
+if not re.fullmatch(r"[0-9a-f]{64}", sys.argv[2]):
+    raise SystemExit("RL_MUON_LION_CALIBRATION_SHA256 must be a lowercase SHA-256")
+PY
 fi
 "$venv_python" - <<'PY' || finish $?
 import sys
@@ -292,7 +307,7 @@ with lock_path.open("w") as lock:
         raise RuntimeError(f"failed to add pure-PyTorch padding fallback in {attention_utils_path}")
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
-if [[ "$mode" == routed-* || "$mode" == momentum-* ]]; then
+if [[ "$mode" == routed-* || "$mode" == momentum-* || "$mode" == lion-* ]]; then
   "$venv_python" - "$campaign_root" "$repo_root/routed-scale-source" "$verl_root" <<'PY' || finish $?
 import fcntl
 import hashlib
@@ -350,6 +365,15 @@ for filename, expected in manifest["files"].items():
         raise RuntimeError(f"dataset hash mismatch for {filename}: {observed} != {expected['sha256']}")
 print(json.dumps({"gpu": torch.cuda.get_device_name(0), "dataset_manifest": manifest}, sort_keys=True), flush=True)
 PY
+if [[ "$mode" == lion-calibration ]]; then
+  write_status running "calibrating Lion actor learning rate"
+  "$venv_python" "$repo_root/calibrate_lion_actor_lr.py" \
+    --model-path "$model_root" \
+    --train-file "$data_root/train.parquet" \
+    --output "$run_root/calibration.json" \
+    --seed 0 || finish $?
+  finish 0
+fi
 case "$mode" in
   smoke)
     expected_step=1
@@ -381,13 +405,28 @@ case "$mode" in
     routes=(rms_matched_momentum_actor)
     extra_args=(trainer.save_freq=-1)
     ;;
+  lion-smoke)
+    expected_step=1
+    routes=(lion_actor_adam_critic lion_actor_muon_critic)
+    extra_args=(trainer.total_training_steps=1 trainer.test_freq=1 trainer.save_freq=-1 data.train_batch_size=32 data.max_prompt_length=256 data.max_response_length=64 actor_rollout_ref.actor.ppo_mini_batch_size=16 critic.ppo_mini_batch_size=16)
+    ;;
+  lion-full)
+    expected_step=435
+    routes=(lion_actor_adam_critic lion_actor_muon_critic)
+    extra_args=(trainer.save_freq=-1)
+    ;;
 esac
+
+if [[ "$mode" == lion-* ]]; then
+  printf '{"lion_actor_lr":%s,"calibration_sha256":"%s"}\n' \
+    "$lion_lr" "$lion_calibration_sha256" > "$run_root/lion-calibration-provenance.json"
+fi
 
 for route in "${routes[@]}"; do
   route_root="$run_root/$route"
   mkdir "$route_root" || finish $?
   write_status running "route=$route"
-  ROUTE="$route" SEED="$seed" MODEL_PATH="$model_root" DATA_ROOT="$data_root" OUTPUT_ROOT="$route_root" \
+  ROUTE="$route" SEED="$seed" MODEL_PATH="$model_root" DATA_ROOT="$data_root" OUTPUT_ROOT="$route_root" LION_ACTOR_LR="$lion_lr" \
     bash "$verl_root/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh" \
       +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
       +critic.model.override_config.attn_implementation=sdpa \

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -118,6 +119,22 @@ def main() -> int:
     routes = tuple(sys.argv[6:]) or ROUTES
     result = build_result(
         run_root, sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5]), routes)
+    if sys.argv[2].startswith("lion-"):
+        learning_rate = float(os.environ["RL_MUON_LION_LR"])
+        calibration_sha256 = os.environ["RL_MUON_LION_CALIBRATION_SHA256"]
+        if not learning_rate > 0 or len(calibration_sha256) != 64:
+            raise RuntimeError("invalid Lion calibration provenance")
+        result["optimizer_protocol"] = {
+            "actor": "Lion",
+            "actor_betas": [0.9, 0.99],
+            "actor_learning_rate": learning_rate,
+            "critic_by_route": {
+                "lion_actor_adam_critic": "AdamW",
+                "lion_actor_muon_critic": "MuonWithAuxAdamW",
+            },
+            "calibration_sha256": calibration_sha256,
+            "calibration_metric": "exact_full_categorical_KL_old_to_new_on_occupied_response_states",
+        }
     encoded = json.dumps(result, sort_keys=True, separators=(",", ":"))
     (run_root / "result.json").write_text(encoded + "\n")
     print("RL_MUON_RESULT " + encoded, flush=True)

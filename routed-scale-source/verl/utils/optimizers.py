@@ -160,6 +160,49 @@ class RMSMatchedMomentum(Muon):
         return loss
 
 
+class Lion(Optimizer):
+    """Canonical Lion optimizer with decoupled weight decay."""
+
+    def __init__(
+        self,
+        params,
+        lr: float,
+        weight_decay: float,
+        betas: tuple[float, float] = (0.9, 0.99),
+    ):
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight decay: {weight_decay}")
+        if not 0.0 <= betas[0] < 1.0 or not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid betas: {betas}")
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay, "betas": betas})
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            for parameter in group["params"]:
+                if parameter.grad is None:
+                    continue
+                gradient = parameter.grad
+                if gradient.is_sparse:
+                    raise RuntimeError("Lion does not support sparse gradients")
+                state = self.state[parameter]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(parameter)
+                exp_avg = state["exp_avg"]
+                update = exp_avg.mul(beta1).add(gradient, alpha=1 - beta1).sign_()
+                parameter.mul_(1 - group["lr"] * group["weight_decay"])
+                parameter.add_(update, alpha=-group["lr"])
+                exp_avg.mul_(beta2).add_(gradient, alpha=1 - beta2)
+        return loss
+
+
 class MuonWithAuxAdamW(Optimizer):
     """Muon for hidden matrices and AdamW for all auxiliary parameters."""
 
