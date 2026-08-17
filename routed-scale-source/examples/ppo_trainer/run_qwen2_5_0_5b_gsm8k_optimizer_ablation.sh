@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-ROUTE=${ROUTE:?Set ROUTE to adam_adam, muon_actor, muon_critic, or routed_scale_adam_actor}
+ROUTE=${ROUTE:?Set ROUTE to adam_adam, muon_actor, muon_critic, routed_scale_adam_actor, or rms_matched_momentum_actor}
 SEED=${SEED:?Set SEED to the paired run seed}
 MODEL_PATH=${MODEL_PATH:?Set MODEL_PATH to the pinned local model snapshot}
 DATA_ROOT=${DATA_ROOT:?Set DATA_ROOT to the prepared GSM8K directory}
@@ -38,6 +38,14 @@ case "$ROUTE" in
         ACTOR_OPT=RoutedScaleAdamW
         ACTOR_OPT_IMPL=verl.utils.optimizers
         ACTOR_OPT_OVERRIDE='{hidden_lr_scale: 0.2}'
+        CRITIC_OPT=AdamW
+        CRITIC_OPT_IMPL=torch.optim
+        CRITIC_OPT_OVERRIDE=null
+        ;;
+    rms_matched_momentum_actor)
+        ACTOR_OPT=RMSMatchedMomentumWithAuxAdamW
+        ACTOR_OPT_IMPL=verl.utils.optimizers
+        ACTOR_OPT_OVERRIDE='{muon_adjust_lr_fn: match_rms_adamw}'
         CRITIC_OPT=AdamW
         CRITIC_OPT_IMPL=torch.optim
         CRITIC_OPT_OVERRIDE=null

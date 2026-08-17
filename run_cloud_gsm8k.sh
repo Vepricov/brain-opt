@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -u
-mode=${1:?mode is required: smoke, full, routed-smoke, or routed-full}
+mode=${1:?mode is required: smoke, full, routed-smoke, routed-full, momentum-smoke, or momentum-full}
 seed=${2:?seed is required}
-case "$mode" in smoke|full|routed-smoke|routed-full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
+case "$mode" in smoke|full|routed-smoke|routed-full|momentum-smoke|momentum-full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
 case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
 source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
@@ -292,7 +292,7 @@ with lock_path.open("w") as lock:
         raise RuntimeError(f"failed to add pure-PyTorch padding fallback in {attention_utils_path}")
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
-if [[ "$mode" == routed-* ]]; then
+if [[ "$mode" == routed-* || "$mode" == momentum-* ]]; then
   "$venv_python" - "$campaign_root" "$repo_root/routed-scale-source" "$verl_root" <<'PY' || finish $?
 import fcntl
 import hashlib
@@ -369,6 +369,16 @@ case "$mode" in
   routed-full)
     expected_step=435
     routes=(routed_scale_adam_actor)
+    extra_args=(trainer.save_freq=-1)
+    ;;
+  momentum-smoke)
+    expected_step=1
+    routes=(rms_matched_momentum_actor)
+    extra_args=(trainer.total_training_steps=1 trainer.test_freq=1 trainer.save_freq=-1 data.train_batch_size=32 data.max_prompt_length=256 data.max_response_length=64 actor_rollout_ref.actor.ppo_mini_batch_size=16 critic.ppo_mini_batch_size=16)
+    ;;
+  momentum-full)
+    expected_step=435
+    routes=(rms_matched_momentum_actor)
     extra_args=(trainer.save_freq=-1)
     ;;
 esac

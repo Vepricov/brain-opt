@@ -89,7 +89,7 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 
         self.assertIn("smoke|full|routed-smoke|routed-full", runner)
-        self.assertIn('if [[ "$mode" == routed-* ]]', runner)
+        self.assertIn('if [[ "$mode" == routed-* || "$mode" == momentum-* ]]', runner)
         self.assertIn('routes=(routed_scale_adam_actor)', runner)
         self.assertIn('"${routes[@]}" || finish $?', runner)
         for relative_path in (
@@ -98,6 +98,18 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
             "routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh",
         ):
             self.assertTrue((ROOT / relative_path).is_file())
+
+    def test_momentum_modes_run_only_rms_matched_control_route(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+        launcher = (
+            ROOT
+            / "routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh"
+        ).read_text()
+
+        self.assertIn("momentum-smoke|momentum-full", runner)
+        self.assertIn('routes=(rms_matched_momentum_actor)', runner)
+        self.assertIn('rms_matched_momentum_actor)', launcher)
+        self.assertIn('ACTOR_OPT=RMSMatchedMomentumWithAuxAdamW', launcher)
 
     def test_runner_fail_closes_unless_campaign_python_is_selected(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()

@@ -122,10 +122,50 @@ class Muon(Optimizer):
         return loss
 
 
+class RMSMatchedMomentum(Muon):
+    """Muon momentum with matched update RMS but no spectral transformation."""
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            for parameter in group["params"]:
+                if parameter.grad is None:
+                    continue
+                gradient = parameter.grad
+                if gradient.is_sparse:
+                    raise RuntimeError("RMSMatchedMomentum does not support sparse gradients")
+                state = self.state[parameter]
+                if "momentum_buffer" not in state:
+                    state["momentum_buffer"] = torch.zeros_like(gradient)
+                momentum_buffer = state["momentum_buffer"]
+                momentum_buffer.lerp_(gradient, 1 - group["momentum"])
+                update = (
+                    gradient.lerp(momentum_buffer, group["momentum"])
+                    if group["nesterov"]
+                    else momentum_buffer
+                )
+                muon_update = _zeropower_via_newton_schulz(update, group["ns_steps"], group["eps"])
+                update = update * (muon_update.float().norm() / (update.float().norm() + group["eps"]))
+                rows, columns = parameter.shape
+                if group["adjust_lr_fn"] == "match_rms_adamw":
+                    adjusted_lr = group["lr"] * 0.2 * math.sqrt(max(rows, columns))
+                else:
+                    adjusted_lr = group["lr"] * math.sqrt(max(1, rows / columns))
+                parameter.mul_(1 - group["lr"] * group["weight_decay"])
+                parameter.add_(update, alpha=-adjusted_lr)
+        return loss
+
+
 class MuonWithAuxAdamW(Optimizer):
     """Muon for hidden matrices and AdamW for all auxiliary parameters."""
 
     requires_named_parameters = True
+    hidden_optimizer_cls = None
+    hidden_route_name = "muon"
 
     def __init__(
         self,
@@ -153,7 +193,7 @@ class MuonWithAuxAdamW(Optimizer):
         all_parameters = [parameter for _, parameter in named_parameters]
         super().__init__(all_parameters, {"lr": lr})
 
-        muon_cls = getattr(torch.optim, "Muon", Muon)
+        muon_cls = self.hidden_optimizer_cls or getattr(torch.optim, "Muon", Muon)
         self.muon = muon_cls(
             [parameter for _, parameter in muon_named],
             lr=muon_lr if muon_lr is not None else lr,
@@ -178,7 +218,7 @@ class MuonWithAuxAdamW(Optimizer):
             (parameter for _, parameter in muon_named),
         )
         self.parameter_routes = {
-            "muon": tuple(name for name, _ in muon_named),
+            self.hidden_route_name: tuple(name for name, _ in muon_named),
             "auxiliary_adamw": tuple(name for name, _ in auxiliary_named),
         }
 
@@ -210,6 +250,13 @@ class MuonWithAuxAdamW(Optimizer):
             self.auxiliary.state,
             self.muon.param_groups[0]["params"],
         )
+
+
+class RMSMatchedMomentumWithAuxAdamW(MuonWithAuxAdamW):
+    """RMS-matched Muon momentum for hidden matrices plus auxiliary AdamW."""
+
+    hidden_optimizer_cls = RMSMatchedMomentum
+    hidden_route_name = "rms_matched_momentum"
 
 
 class RoutedScaleAdamW(Optimizer):
