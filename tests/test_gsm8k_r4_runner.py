@@ -81,9 +81,23 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
     def test_full_run_disables_large_periodic_checkpoints(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 
-        full_branch = runner.split('if [[ "$mode" == smoke ]]', 1)[1]
-        full_branch = full_branch.split('for route in "${routes[@]}"', 1)[0]
+        full_branch = runner.split('  full)\n', 1)[1]
+        full_branch = full_branch.split('    ;;', 1)[0]
         self.assertIn('extra_args=(trainer.save_freq=-1)', full_branch)
+
+    def test_routed_modes_overlay_pinned_source_and_run_only_control_route(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+
+        self.assertIn("smoke|full|routed-smoke|routed-full", runner)
+        self.assertIn('if [[ "$mode" == routed-* ]]', runner)
+        self.assertIn('routes=(routed_scale_adam_actor)', runner)
+        self.assertIn('"${routes[@]}" || finish $?', runner)
+        for relative_path in (
+            "routed-scale-source/verl/utils/optimizers.py",
+            "routed-scale-source/verl/workers/config/optimizer.py",
+            "routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh",
+        ):
+            self.assertTrue((ROOT / relative_path).is_file())
 
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
@@ -117,6 +131,31 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         self.assertEqual(0.5, route["validation_auc"])
         self.assertEqual(1.5, route["terminal_metrics"]["actor/grad_norm"])
         self.assertEqual(0.01, route["safety_points"][0]["metrics"]["actor/ppo_kl"])
+
+    def test_result_can_be_bound_to_only_the_routed_scale_control(self):
+        metric = "val-core/openai/gsm8k/reward/mean@1"
+        control = "routed_scale_adam_actor"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            run = root / control
+            run.mkdir()
+            rows = [
+                {"step": 0, "data": {metric: 0.25}},
+                {"step": 1, "data": {
+                    metric: 0.5,
+                    "actor/ppo_kl": 0.01,
+                    "actor/pg_clipfrac": 0.02,
+                    "critic/vf_clipfrac": 0.03,
+                }},
+            ]
+            (run / "metrics.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows))
+
+            result = build_result(
+                root, "routed-smoke", 0, "commit", 1, (control,))
+
+        self.assertEqual([control], list(result["routes"]))
+        self.assertEqual(1, result["routes"][control]["terminal_step"])
 
 
 if __name__ == "__main__":

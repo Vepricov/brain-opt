@@ -19,10 +19,10 @@ REQUIRED_SAFETY_METRICS = (
 
 def build_result(
     run_root: Path, phase: str, seed: int, source_commit: str,
-    expected_step: int,
+    expected_step: int, routes: tuple[str, ...] = ROUTES,
 ) -> dict:
-    routes = {}
-    for route in ROUTES:
+    route_results = {}
+    for route in routes:
         paths = list((run_root / route).rglob("metrics.jsonl"))
         if len(paths) != 1:
             raise RuntimeError(
@@ -96,7 +96,7 @@ def build_result(
         }
         if len(terminal_metrics) > 64:
             raise RuntimeError(f"too many terminal safety metrics for {route}")
-        routes[route] = {
+        route_results[route] = {
             "rows": len(rows), "terminal_step": int(terminal["step"]),
             "validation_metric": validation_metric,
             "validation_points": validation_points,
@@ -107,16 +107,17 @@ def build_result(
         }
     return {
         "phase": phase, "seed": seed, "source_commit": source_commit,
-        "routes": routes,
+        "routes": route_results,
     }
 
 
 def main() -> int:
-    if len(sys.argv) != 6:
-        raise SystemExit("usage: collect_gsm8k_r4_result.py ROOT PHASE SEED COMMIT STEP")
+    if len(sys.argv) < 6:
+        raise SystemExit("usage: collect_gsm8k_r4_result.py ROOT PHASE SEED COMMIT STEP [ROUTE ...]")
     run_root = Path(sys.argv[1])
+    routes = tuple(sys.argv[6:]) or ROUTES
     result = build_result(
-        run_root, sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5]))
+        run_root, sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5]), routes)
     encoded = json.dumps(result, sort_keys=True, separators=(",", ":"))
     (run_root / "result.json").write_text(encoded + "\n")
     print("RL_MUON_RESULT " + encoded, flush=True)

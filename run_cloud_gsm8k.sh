@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -u
-mode=${1:?mode is required: smoke or full}
+mode=${1:?mode is required: smoke, full, routed-smoke, or routed-full}
 seed=${2:?seed is required}
-case "$mode" in smoke|full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
+case "$mode" in smoke|full|routed-smoke|routed-full) ;; *) echo "invalid mode: $mode"; exit 64 ;; esac
 case "$seed" in 0|1|2) ;; *) echo "invalid seed: $seed"; exit 64 ;; esac
 repo_root=$(cd "$(dirname "$0")" && pwd)
 source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
@@ -264,6 +264,45 @@ with lock_path.open("w") as lock:
         raise RuntimeError(f"failed to add pure-PyTorch padding fallback in {attention_utils_path}")
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
+if [[ "$mode" == routed-* ]]; then
+  python3 - "$campaign_root" "$repo_root/routed-scale-source" "$verl_root" <<'PY' || finish $?
+import fcntl
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+campaign_root = Path(sys.argv[1])
+source_root = Path(sys.argv[2])
+verl_root = Path(sys.argv[3])
+relative_paths = (
+    Path("verl/utils/optimizers.py"),
+    Path("verl/workers/config/optimizer.py"),
+    Path("examples/ppo_trainer/run_qwen2_5_0_5b_gsm8k_optimizer_ablation.sh"),
+)
+
+lock_path = campaign_root / ".routed-scale-adamw.lock"
+with lock_path.open("w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    for relative_path in relative_paths:
+        source_path = source_root / relative_path
+        target_path = verl_root / relative_path
+        if not source_path.is_file() or not target_path.is_file():
+            raise RuntimeError(f"missing routed-scale overlay path: {source_path} or {target_path}")
+        source = source_path.read_bytes()
+        if source_path.suffix == ".py":
+            compile(source, str(source_path), "exec")
+        if target_path.read_bytes() != source:
+            temporary = target_path.with_suffix(target_path.suffix + f".tmp.{os.getpid()}")
+            temporary.write_bytes(source)
+            os.replace(temporary, target_path)
+        observed = hashlib.sha256(target_path.read_bytes()).hexdigest()
+        expected = hashlib.sha256(source).hexdigest()
+        if observed != expected:
+            raise RuntimeError(f"routed-scale overlay hash mismatch for {target_path}")
+        print(f"verified routed-scale overlay: {relative_path} sha256={observed}", flush=True)
+PY
+fi
 python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
 import hashlib
 import json
@@ -283,18 +322,28 @@ for filename, expected in manifest["files"].items():
         raise RuntimeError(f"dataset hash mismatch for {filename}: {observed} != {expected['sha256']}")
 print(json.dumps({"gpu": torch.cuda.get_device_name(0), "dataset_manifest": manifest}, sort_keys=True), flush=True)
 PY
-if [[ "$mode" == smoke ]]; then
-  expected_step=1
-  routes=(adam_adam muon_actor muon_critic)
-  extra_args=(trainer.total_training_steps=1 trainer.test_freq=1 trainer.save_freq=-1 data.train_batch_size=32 data.max_prompt_length=256 data.max_response_length=64 actor_rollout_ref.actor.ppo_mini_batch_size=16 critic.ppo_mini_batch_size=16)
-else
-  expected_step=435
-  routes=(adam_adam muon_actor muon_critic)
-  # Full FSDP actor+critic checkpoints are several GiB each.  Three seeds
-  # share the campaign home quota, so periodic saves exhaust it before the
-  # first route reaches step 50.  This experiment consumes metrics only.
-  extra_args=(trainer.save_freq=-1)
-fi
+case "$mode" in
+  smoke)
+    expected_step=1
+    routes=(adam_adam muon_actor muon_critic)
+    extra_args=(trainer.total_training_steps=1 trainer.test_freq=1 trainer.save_freq=-1 data.train_batch_size=32 data.max_prompt_length=256 data.max_response_length=64 actor_rollout_ref.actor.ppo_mini_batch_size=16 critic.ppo_mini_batch_size=16)
+    ;;
+  full)
+    expected_step=435
+    routes=(adam_adam muon_actor muon_critic)
+    extra_args=(trainer.save_freq=-1)
+    ;;
+  routed-smoke)
+    expected_step=1
+    routes=(routed_scale_adam_actor)
+    extra_args=(trainer.total_training_steps=1 trainer.test_freq=1 trainer.save_freq=-1 data.train_batch_size=32 data.max_prompt_length=256 data.max_response_length=64 actor_rollout_ref.actor.ppo_mini_batch_size=16 critic.ppo_mini_batch_size=16)
+    ;;
+  routed-full)
+    expected_step=435
+    routes=(routed_scale_adam_actor)
+    extra_args=(trainer.save_freq=-1)
+    ;;
+esac
 
 for route in "${routes[@]}"; do
   route_root="$run_root/$route"
@@ -335,5 +384,5 @@ print(json.dumps({"route": route, "rows": len(rows), "terminal_step": max(steps)
 PY
 done
 python3 "$repo_root/collect_gsm8k_r4_result.py" \
-  "$run_root" "$mode" "$seed" "$source_commit" "$expected_step" || finish $?
+  "$run_root" "$mode" "$seed" "$source_commit" "$expected_step" "${routes[@]}" || finish $?
 finish 0
