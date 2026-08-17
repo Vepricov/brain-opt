@@ -77,11 +77,26 @@ export TORCH_HOME="$campaign_root/torch-cache"
 export TOKENIZERS_PARALLELISM=false
 export VLLM_USE_V1=1
 export TRITON_LIBCUDA_PATH=/lib/x86_64-linux-gnu
+venv_python="$venv_root/bin/python3"
+if [[ ! -x "$venv_python" ]]; then
+  printf 'campaign venv interpreter is missing: %s\n' "$venv_python"
+  finish 78
+fi
+if [[ $(command -v python3) != "$venv_python" ]]; then
+  printf 'campaign venv is not first on PATH: expected=%s actual=%s\n' \
+    "$venv_python" "$(command -v python3)"
+  finish 79
+fi
+"$venv_python" - <<'PY' || finish $?
+import sys
+print(f"campaign interpreter: executable={sys.executable} prefix={sys.prefix}", flush=True)
+PY
 # The pinned VERL snapshot now calls DataProto.to_tensordict(), whose
 # NonTensorStack conversion is only available with tensordict >= 0.10.  Older
 # campaigns were built with 0.8.3, so repair a reused venv once under a lock.
-python3 - "$campaign_root" <<'PY' || finish $?
+"$venv_python" - "$campaign_root" <<'PY' || finish $?
 import fcntl
+import importlib.util
 import importlib.metadata
 import subprocess
 import sys
@@ -93,6 +108,19 @@ campaign_root = Path(sys.argv[1])
 lock_path = campaign_root / ".tensordict010-compat.lock"
 with lock_path.open("w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
+    if importlib.util.find_spec("cloudpickle") is None:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-cache-dir",
+                "--no-deps",
+                "cloudpickle==3.1.1",
+            ],
+            check=True,
+        )
     try:
         installed = Version(importlib.metadata.version("tensordict"))
     except importlib.metadata.PackageNotFoundError:
@@ -127,7 +155,7 @@ PY
 # A reused campaign may have been bootstrapped by a source commit predating the
 # vLLM 0.8 compatibility patch. Patch that installed snapshot under a lock so
 # retries and concurrently queued seeds remain safe without rebuilding the venv.
-python3 - "$campaign_root" \
+"$venv_python" - "$campaign_root" \
   "$verl_root/verl/workers/rollout/vllm_rollout/vllm_async_server.py" \
   "$verl_root/verl/workers/rollout/vllm_rollout/utils.py" \
   "$verl_root/verl/utils/attention_utils.py" <<'PY' || finish $?
@@ -265,7 +293,7 @@ with lock_path.open("w") as lock:
 print(f"verified vLLM 0.8 argv compatibility: {path}", flush=True)
 PY
 if [[ "$mode" == routed-* ]]; then
-  python3 - "$campaign_root" "$repo_root/routed-scale-source" "$verl_root" <<'PY' || finish $?
+  "$venv_python" - "$campaign_root" "$repo_root/routed-scale-source" "$verl_root" <<'PY' || finish $?
 import fcntl
 import hashlib
 import os
@@ -303,7 +331,7 @@ with lock_path.open("w") as lock:
         print(f"verified routed-scale overlay: {relative_path} sha256={observed}", flush=True)
 PY
 fi
-python3 - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
+"$venv_python" - "$data_root" "$campaign_root/bootstrap/data-manifest.json" <<'PY' || finish $?
 import hashlib
 import json
 import sys
@@ -361,7 +389,7 @@ for route in "${routes[@]}"; do
     echo "missing metrics for route=$route"
     finish 77
   fi
-  python3 - "$metrics" "$expected_step" "$route" <<'PY' || finish $?
+  "$venv_python" - "$metrics" "$expected_step" "$route" <<'PY' || finish $?
 import json
 import math
 import sys
@@ -383,6 +411,6 @@ for row_index, row in enumerate(rows):
 print(json.dumps({"route": route, "rows": len(rows), "terminal_step": max(steps)}), flush=True)
 PY
 done
-python3 "$repo_root/collect_gsm8k_r4_result.py" \
+"$venv_python" "$repo_root/collect_gsm8k_r4_result.py" \
   "$run_root" "$mode" "$seed" "$source_commit" "$expected_step" "${routes[@]}" || finish $?
 finish 0

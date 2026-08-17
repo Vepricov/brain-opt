@@ -99,6 +99,13 @@ class Gsm8kR4RunnerTest(unittest.TestCase):
         ):
             self.assertTrue((ROOT / relative_path).is_file())
 
+    def test_runner_fail_closes_unless_campaign_python_is_selected(self):
+        runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
+
+        self.assertIn('venv_python="$venv_root/bin/python3"', runner)
+        self.assertIn('$(command -v python3) != "$venv_python"', runner)
+        self.assertIn('cloudpickle==3.1.1', runner)
+
     def test_scientific_result_requires_validation_endpoint_and_auc(self):
         runner = (ROOT / "run_cloud_gsm8k.sh").read_text()
 
