@@ -9,16 +9,17 @@ import time
 from pathlib import Path
 
 
-def read_last_jsonl(path: Path) -> dict:
-    last = None
+def read_jsonl(path: Path) -> list[dict]:
+    rows = []
     with path.open("r", encoding="utf-8") as stream:
         for raw in stream:
             raw = raw.strip()
             if raw:
-                last = json.loads(raw)
-    if last is None:
+                rows.append(json.loads(raw))
+    if not rows:
         raise RuntimeError(f"empty metrics file: {path}")
-    return last
+    rows.sort(key=lambda row: int(row["step"]))
+    return rows
 
 
 def main() -> None:
@@ -50,7 +51,8 @@ def main() -> None:
         if len(metrics_paths) != 1:
             raise RuntimeError(f"expected one metrics.jsonl for {route}, found {len(metrics_paths)}")
         metrics = metrics_paths[0]
-        row = read_last_jsonl(metrics)
+        rows = read_jsonl(metrics)
+        row = rows[-1]
         stat = metrics.stat()
         data = row.get("data", {})
         interesting = {
@@ -58,12 +60,43 @@ def main() -> None:
             for key, value in data.items()
             if any(token in key.lower() for token in ("reward", "acc", "kl", "clip", "grad", "loss"))
         }
+        validation_points = []
+        for candidate_row in rows:
+            candidates = {
+                key: value
+                for key, value in candidate_row.get("data", {}).items()
+                if isinstance(key, str)
+                and key.startswith("val-core/")
+                and ("/acc/mean@" in key or "/reward/mean@" in key)
+                and isinstance(value, (int, float))
+            }
+            if len(candidates) == 1:
+                validation_points.append(
+                    {"step": int(candidate_row["step"]), "value": float(next(iter(candidates.values())))}
+                )
+        validation = None
+        if validation_points:
+            if len(validation_points) == 1:
+                auc = validation_points[0]["value"]
+            else:
+                area = sum(
+                    (right["step"] - left["step"])
+                    * (left["value"] + right["value"]) / 2
+                    for left, right in zip(validation_points, validation_points[1:])
+                )
+                auc = area / (validation_points[-1]["step"] - validation_points[0]["step"])
+            validation = {
+                "points": len(validation_points),
+                "latest": validation_points[-1],
+                "auc": auc,
+            }
         routes[route] = {
             "state": "active_or_complete",
             "step": int(row["step"]),
-            "metrics_rows": sum(1 for line in metrics.read_text().splitlines() if line.strip()),
+            "metrics_rows": len(rows),
             "age_seconds": max(0.0, time.time() - stat.st_mtime),
             "metrics": interesting,
+            "validation": validation,
         }
 
     print("RL_MUON_PROGRESS " + json.dumps(snapshot, sort_keys=True, allow_nan=False), flush=True)
