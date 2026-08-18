@@ -87,7 +87,9 @@ Path(path).write_text(json.dumps({"protocol":"fixed-gsm8k-learning-rate-transfer
 PY
 calibration_sha256=$(sha256sum "$run_root/fixed-transfer.json" | cut -d' ' -f1)
 run_route() {
-  local phase=$1 route=$2 output_root="$run_root/$phase/$route"
+  local phase=$1
+  local route=$2
+  local output_root="$run_root/$phase/$route"
   mkdir -p "$output_root"
   PHASE="$phase" ROUTE="$route" DATASET="$dataset" DATA_SOURCE="$data_source" SEED=0 \
     MODEL_PATH="$model_root" DATA_ROOT="$data_root" OUTPUT_ROOT="$output_root" \
