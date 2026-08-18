@@ -55,6 +55,26 @@ def test_reward_module_loads_without_preinsertion_in_sys_modules():
     ) == 1.0
 
 
+def test_reward_accepts_verl_runtime_metadata_without_weakening_provenance_schema():
+    extra_info = _reward_extra("cross_dataset/svamp")
+    extra_info.update({"num_turns": 1, "rollout_reward_scores": {}})
+
+    assert compute_score(
+        "cross_dataset/svamp",
+        "work\nFinal answer: 2",
+        "2",
+        extra_info,
+    ) == 1.0
+
+    with pytest.raises(ContractError, match="provenance schema"):
+        compute_score(
+            "cross_dataset/svamp",
+            "work\nFinal answer: 2",
+            "2",
+            {**extra_info, "unexpected_runtime_field": True},
+        )
+
+
 def test_verl_critical_paths_match_pinned_v080_runtime_layout():
     assert set(cross_dataset_screen.VERL_CRITICAL_PATHS) == {
         "verl/trainer/main_ppo.py",
