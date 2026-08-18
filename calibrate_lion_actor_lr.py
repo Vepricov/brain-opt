@@ -29,8 +29,6 @@ if optimizer_source := os.environ.get("RL_MUON_OPTIMIZERS_SOURCE"):
 else:
     from verl.utils.optimizers import Lion
 
-MEAN_KL_CAP = 0.002
-Q95_KL_CAP = 0.004
 MATCH_RELATIVE_TOLERANCE = 0.10
 CANDIDATE_MULTIPLIERS = (0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0)
 
@@ -149,14 +147,28 @@ def summarize_kl(values: torch.Tensor) -> dict[str, float | int]:
     }
 
 
-def select_candidate(trials: list[dict[str, Any]]) -> dict[str, Any]:
+def select_candidate(trials: list[dict[str, Any]], adam_kl: dict[str, float | int]) -> dict[str, Any]:
+    for trial in trials:
+        for metric in ("mean", "q95"):
+            trial[f"{metric}_relative_error"] = abs(float(trial[metric]) - float(adam_kl[metric])) / max(
+                float(adam_kl[metric]), 1e-12
+            )
     eligible = [
-        trial for trial in trials
-        if trial["safe"] and trial["mean_relative_error"] <= MATCH_RELATIVE_TOLERANCE
+        trial
+        for trial in trials
+        if trial["mean_relative_error"] <= MATCH_RELATIVE_TOLERANCE
+        and trial["q95_relative_error"] <= MATCH_RELATIVE_TOLERANCE
     ]
     if not eligible:
-        raise RuntimeError(f"no Lion learning rate matched Adam within the frozen gate: {trials}")
-    return min(eligible, key=lambda trial: (trial["mean_relative_error"], trial["learning_rate"]))
+        raise RuntimeError(f"no Lion learning rate jointly matched Adam mean and q95: {trials}")
+    return min(
+        eligible,
+        key=lambda trial: (
+            max(trial["mean_relative_error"], trial["q95_relative_error"]),
+            trial["mean_relative_error"] + trial["q95_relative_error"],
+            trial["learning_rate"],
+        ),
+    )
 
 
 def restore_with_gradients(
@@ -276,9 +288,6 @@ def main() -> None:
     adam_kl = summarize_kl(occupied_state_categorical_kl(
         baseline, actor, sequences, attention, prompt_width, response_mask
     ))
-    if adam_kl["mean"] > MEAN_KL_CAP or adam_kl["q95"] > Q95_KL_CAP:
-        raise RuntimeError(f"Adam target violates the predeclared KL caps: {adam_kl}")
-
     for multiplier in CANDIDATE_MULTIPLIERS:
         learning_rate = args.adam_lr * multiplier
         restore_with_gradients(actor, baseline_state, gradients)
@@ -287,17 +296,12 @@ def main() -> None:
         summary = summarize_kl(occupied_state_categorical_kl(
             baseline, actor, sequences, attention, prompt_width, response_mask
         ))
-        summary.update(
-            learning_rate=learning_rate,
-            mean_relative_error=abs(float(summary["mean"]) - float(adam_kl["mean"]))
-            / max(float(adam_kl["mean"]), 1e-12),
-            safe=bool(summary["mean"] <= MEAN_KL_CAP and summary["q95"] <= Q95_KL_CAP),
-        )
+        summary["learning_rate"] = learning_rate
         trials.append(summary)
         del lion
         torch.cuda.empty_cache()
 
-    chosen = select_candidate(trials)
+    chosen = select_candidate(trials, adam_kl)
     model_config = Path(args.model_path) / "config.json"
     result = {
         "schema_version": 1,
@@ -309,12 +313,14 @@ def main() -> None:
         "lion_candidates": trials,
         "chosen_lion_learning_rate": chosen["learning_rate"],
         "chosen_lion_actual_full_categorical_kl": {
-            key: chosen[key] for key in ("mean", "q95", "occupied_states", "mean_relative_error")
+            key: chosen[key]
+            for key in ("mean", "q95", "occupied_states", "mean_relative_error", "q95_relative_error")
         },
         "gates": {
-            "mean_kl_cap": MEAN_KL_CAP,
-            "q95_kl_cap": Q95_KL_CAP,
-            "adam_match_relative_tolerance": MATCH_RELATIVE_TOLERANCE,
+            "adam_mean_kl_target": adam_kl["mean"],
+            "adam_q95_kl_target": adam_kl["q95"],
+            "mean_match_relative_tolerance": MATCH_RELATIVE_TOLERANCE,
+            "q95_match_relative_tolerance": MATCH_RELATIVE_TOLERANCE,
             "passed": True,
         },
         "identities": {

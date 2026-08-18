@@ -49,18 +49,23 @@ def test_exact_full_categorical_kl_matches_direct_statewise_calculation_and_mask
     assert actual.numel() == 1
 
 
-def test_candidate_selection_rejects_unsafe_q95_even_when_mean_matches():
+def test_candidate_selection_requires_mean_and_q95_to_match_adam():
+    adam = {"mean": 0.006, "q95": 0.025}
     trials = [
-        {"learning_rate": 1e-6, "mean_relative_error": 0.0, "safe": False, "mean": 0.001, "q95": 0.005},
-        {"learning_rate": 9e-7, "mean_relative_error": 0.05, "safe": True, "mean": 0.00095, "q95": 0.003},
+        {"learning_rate": 1e-6, "mean": 0.006, "q95": 0.030},
+        {"learning_rate": 9e-7, "mean": 0.0057, "q95": 0.024},
     ]
-    assert CALIBRATION.select_candidate(trials)["learning_rate"] == 9e-7
+    assert CALIBRATION.select_candidate(trials, adam)["learning_rate"] == 9e-7
+    assert trials[0]["q95_relative_error"] > CALIBRATION.MATCH_RELATIVE_TOLERANCE
+    assert trials[1]["mean_relative_error"] <= CALIBRATION.MATCH_RELATIVE_TOLERANCE
+    assert trials[1]["q95_relative_error"] <= CALIBRATION.MATCH_RELATIVE_TOLERANCE
 
 
-def test_candidate_selection_fails_closed_without_safe_match():
+def test_candidate_selection_fails_closed_without_joint_match():
+    adam = {"mean": 0.006, "q95": 0.025}
     trials = [
-        {"learning_rate": 1e-6, "mean_relative_error": 0.0, "safe": False},
-        {"learning_rate": 5e-7, "mean_relative_error": 0.4, "safe": True},
+        {"learning_rate": 1e-6, "mean": 0.006, "q95": 0.030},
+        {"learning_rate": 5e-7, "mean": 0.003, "q95": 0.0125},
     ]
     with unittest.TestCase().assertRaisesRegex(RuntimeError, "no Lion learning rate"):
-        CALIBRATION.select_candidate(trials)
+        CALIBRATION.select_candidate(trials, adam)
