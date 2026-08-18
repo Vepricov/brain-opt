@@ -22,6 +22,7 @@ MODEL_IDENTITY_ARTIFACT=${MODEL_IDENTITY_ARTIFACT:?Set the model identity artifa
 VERL_IDENTITY_ARTIFACT=${VERL_IDENTITY_ARTIFACT:?Set the VERL identity artifact}
 VERL_ROOT=${VERL_ROOT:?Set the active VERL checkout}
 ROUTING_OVERLAY_ROOT=${ROUTING_OVERLAY_ROOT:?Set the routing overlay root}
+GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.45}
 CALIBRATION_METRIC=exact_full_categorical_KL_old_to_new_on_occupied_response_states
 [[ "$CALIBRATION_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid calibration hash" >&2; exit 64; }
 [[ "$MODEL_IDENTITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid model identity hash" >&2; exit 64; }
@@ -91,13 +92,13 @@ python3 - "$RUN_DIR/run-provenance.json" "$PHASE" "$ROUTE" "$DATASET" \
   "$DATA_SOURCE" "$SOURCE_COMMIT" "$DATA_MANIFEST_SHA256" "$ACTOR_OPT" \
   "$ACTOR_LR" "$ACTOR_ROUTE_DESCRIPTION" "$ACTOR_PARAMETER_ROUTING" \
   "$ACTOR_USES_ADAMW_AUXILIARIES" "$CALIBRATION_SHA256" "$CALIBRATION_METRIC" \
-  "$MODEL_IDENTITY_SHA256" "$VERL_IDENTITY_SHA256" <<'PY'
+  "$MODEL_IDENTITY_SHA256" "$VERL_IDENTITY_SHA256" "$GPU_MEMORY_UTILIZATION" <<'PY'
 import json, pathlib, sys
 (
     path, phase, route, dataset, data_source, source_commit,
     manifest_sha256, actor_optimizer, actor_lr, route_description,
     parameter_routing, uses_adamw_auxiliaries, calibration_hash, calibration_metric,
-    model_identity_hash, verl_identity_hash,
+    model_identity_hash, verl_identity_hash, gpu_memory_utilization,
 ) = sys.argv[1:]
 pathlib.Path(path).write_text(json.dumps({
     "protocol": "cross-dataset-actor-screen-v1",
@@ -120,6 +121,7 @@ pathlib.Path(path).write_text(json.dumps({
     "calibration_metric": calibration_metric,
     "model_snapshot_sha256": model_identity_hash,
     "verl_implementation_sha256": verl_identity_hash,
+    "rollout_gpu_memory_utilization": float(gpu_memory_utilization),
 }, sort_keys=True) + "\n")
 PY
 
@@ -154,7 +156,7 @@ python3 -m verl.trainer.main_ppo \
   actor_rollout_ref.actor.fsdp_config.seed=0 \
   actor_rollout_ref.rollout.name=vllm \
   actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-  actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
+  actor_rollout_ref.rollout.gpu_memory_utilization="$GPU_MEMORY_UTILIZATION" \
   actor_rollout_ref.rollout.n=1 \
   actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
   actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \

@@ -8,10 +8,9 @@ import math
 import os
 import re
 import subprocess
-from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, NamedTuple, Sequence
 
 
 SEED = 0
@@ -54,8 +53,7 @@ class AmbiguousAnswerError(ContractError):
     """More than one final answer or a non-terminal final answer was found."""
 
 
-@dataclass(frozen=True)
-class DatasetSpec:
+class DatasetSpec(NamedTuple):
     key: str
     source: str
     repository: str

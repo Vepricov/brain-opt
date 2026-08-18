@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import math
 import subprocess
@@ -30,6 +31,28 @@ from cross_dataset_screen import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_reward_module_loads_without_preinsertion_in_sys_modules():
+    module_path = ROOT / "cross_dataset_screen.py"
+    spec = importlib.util.spec_from_file_location("dynamic_cross_dataset_reward", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+
+    spec.loader.exec_module(module)
+
+    assert module.compute_score(
+        "cross_dataset/svamp",
+        "work\nFinal answer: 2",
+        "2",
+        {
+            "data_source": "cross_dataset/svamp",
+            "dataset": "svamp",
+            "split": "validation",
+            "index": 0,
+            "id": "fixture-0",
+        },
+    ) == 1.0
 
 
 def test_verl_critical_paths_match_pinned_v080_runtime_layout():
@@ -847,3 +870,6 @@ def test_compat_shell_parses_and_hash_capture_uses_artifact_files():
     ).read_text()
     assert "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" in launcher
     assert "+critic.model.override_config.attn_implementation=sdpa" in launcher
+    assert 'GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.45}' in launcher
+    assert 'actor_rollout_ref.rollout.gpu_memory_utilization="$GPU_MEMORY_UTILIZATION"' in launcher
+    assert '"rollout_gpu_memory_utilization": float(gpu_memory_utilization)' in launcher
