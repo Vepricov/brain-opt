@@ -39,7 +39,12 @@ def test_exact_full_categorical_kl_matches_direct_statewise_calculation_and_mask
     response_mask = torch.tensor([[1.0, 0.0]])
 
     actual = CALIBRATION.occupied_state_categorical_kl(
-        baseline, candidate, sequences, attention, prompt_width=2, response_mask=response_mask
+        baseline,
+        candidate,
+        sequences,
+        attention,
+        prompt_width=2,
+        response_mask=response_mask,
     )
     old_logp = torch.log_softmax(torch.tensor(old_logits)[:, 1:3], dim=-1)
     new_logp = torch.log_softmax(torch.tensor(new_logits)[:, 1:3], dim=-1)
@@ -69,3 +74,29 @@ def test_candidate_selection_fails_closed_without_joint_match():
     ]
     with unittest.TestCase().assertRaisesRegex(RuntimeError, "no Lion learning rate"):
         CALIBRATION.select_candidate(trials, adam)
+
+
+def test_calibration_names_actual_metric_and_keeps_kl_reduction_on_device():
+    source = SOURCE.read_text()
+    assert CALIBRATION.CALIBRATION_METRIC == (
+        "exact_full_categorical_KL_old_to_new_on_occupied_response_states"
+    )
+    kl_function = source[
+        source.index("def occupied_state_categorical_kl") : source.index(
+            "def summarize_kl"
+        )
+    ]
+    assert ".cpu()" not in kl_function
+    assert 'device = torch.device("cuda")' in source
+    assert '"model_compute_device": "cuda"' in source
+    assert "old policy logprobs mutated during calibration" in source
+    assert "reference policy logprobs mutated during calibration" in source
+
+
+def test_both_non_adam_routes_share_frozen_gradients_and_joint_matching():
+    source = SOURCE.read_text()
+    assert "MuonWithAuxAdamW" in source
+    assert "muon_trials" in source and "lion_trials" in source
+    assert 'select_candidate(muon_trials, adam_kl, "Muon")' in source
+    assert 'select_candidate(lion_trials, adam_kl, "Lion")' in source
+    assert source.count("restore_with_gradients(actor, baseline_state, gradients)") >= 3

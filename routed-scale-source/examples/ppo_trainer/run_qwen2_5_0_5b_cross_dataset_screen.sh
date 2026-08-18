@@ -14,7 +14,10 @@ REWARD_PATH=${REWARD_PATH:?Set REWARD_PATH to cross_dataset_screen.py}
 SOURCE_COMMIT=${SOURCE_COMMIT:?Set SOURCE_COMMIT to the checked-out commit}
 DATA_MANIFEST_SHA256=${DATA_MANIFEST_SHA256:?Set DATA_MANIFEST_SHA256}
 LION_ACTOR_LR=${LION_ACTOR_LR:-}
-LION_CALIBRATION_SHA256=${LION_CALIBRATION_SHA256:-}
+MUON_ACTOR_LR=${MUON_ACTOR_LR:-}
+CALIBRATION_SHA256=${CALIBRATION_SHA256:?Set the per-dataset calibration artifact hash}
+CALIBRATION_METRIC=exact_full_categorical_KL_old_to_new_on_occupied_response_states
+[[ "$CALIBRATION_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid calibration hash" >&2; exit 64; }
 
 [[ "$SEED" == 0 ]] || { echo "cross-dataset screen requires seed 0" >&2; exit 64; }
 case "$PHASE" in gate|screen) ;; *) echo "unsupported PHASE=$PHASE" >&2; exit 64 ;; esac
@@ -34,20 +37,26 @@ case "$ROUTE" in
     ACTOR_OPT=MuonWithAuxAdamW
     ACTOR_OPT_IMPL=verl.utils.optimizers
     ACTOR_OPT_OVERRIDE='{muon_adjust_lr_fn: match_rms_adamw}'
+    ACTOR_LR=${MUON_ACTOR_LR:?Set the per-dataset calibrated Muon actor learning rate}
+    ACTOR_ROUTE_DESCRIPTION="Muon on hidden attention/MLP matrices plus AdamW auxiliaries"
+    ACTOR_PARAMETER_ROUTING="hidden_attention_mlp_matrices_muon;all_auxiliaries_adamw"
+    ACTOR_USES_ADAMW_AUXILIARIES=true
     ;;
   lion_actor)
-    [[ "$PHASE" == screen ]] || { echo "Lion is not a gate route" >&2; exit 64; }
     ACTOR_OPT=Lion
     ACTOR_OPT_IMPL=verl.utils.optimizers
     ACTOR_OPT_OVERRIDE='{betas: [0.9, 0.99]}'
     ACTOR_LR=${LION_ACTOR_LR:?Set the frozen Lion actor learning rate}
-    [[ "$LION_CALIBRATION_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid Lion calibration hash" >&2; exit 64; }
+    ACTOR_ROUTE_DESCRIPTION="Lion on all actor parameters; strict no-Adam actor route"
+    ACTOR_PARAMETER_ROUTING="all_actor_parameters_lion_no_adam"
+    ACTOR_USES_ADAMW_AUXILIARIES=false
     ;;
   *) echo "unsupported ROUTE=$ROUTE" >&2; exit 64 ;;
 esac
-if [[ "$PHASE" == gate && "$ROUTE" != adamw_actor ]]; then
-  echo "the mandatory gate must use the AdamW actor baseline" >&2
-  exit 64
+if [[ "$ROUTE" == adamw_actor ]]; then
+  ACTOR_ROUTE_DESCRIPTION="AdamW on all actor parameters"
+  ACTOR_PARAMETER_ROUTING="all_actor_parameters"
+  ACTOR_USES_ADAMW_AUXILIARIES=false
 fi
 
 TOTAL_STEPS=$([[ "$PHASE" == gate ]] && echo 1 || echo 50)
@@ -57,11 +66,13 @@ mkdir -p "$RUN_DIR"
 export VERL_FILE_LOGGER_PATH="$RUN_DIR/metrics.jsonl"
 python3 - "$RUN_DIR/run-provenance.json" "$PHASE" "$ROUTE" "$DATASET" \
   "$DATA_SOURCE" "$SOURCE_COMMIT" "$DATA_MANIFEST_SHA256" "$ACTOR_OPT" \
-  "$ACTOR_LR" "$LION_CALIBRATION_SHA256" <<'PY'
+  "$ACTOR_LR" "$ACTOR_ROUTE_DESCRIPTION" "$ACTOR_PARAMETER_ROUTING" \
+  "$ACTOR_USES_ADAMW_AUXILIARIES" "$CALIBRATION_SHA256" "$CALIBRATION_METRIC" <<'PY'
 import json, pathlib, sys
 (
     path, phase, route, dataset, data_source, source_commit,
-    manifest_sha256, actor_optimizer, actor_lr, lion_hash,
+    manifest_sha256, actor_optimizer, actor_lr, route_description,
+    parameter_routing, uses_adamw_auxiliaries, calibration_hash, calibration_metric,
 ) = sys.argv[1:]
 pathlib.Path(path).write_text(json.dumps({
     "protocol": "cross-dataset-actor-screen-v1",
@@ -77,7 +88,11 @@ pathlib.Path(path).write_text(json.dumps({
     "preserve_reference_logprobs": True,
     "actor_optimizer": actor_optimizer,
     "actor_learning_rate": float(actor_lr),
-    "lion_calibration_sha256": lion_hash if route == "lion_actor" else None,
+    "actor_route_description": route_description,
+    "actor_parameter_routing": parameter_routing,
+    "actor_uses_adamw_auxiliaries": uses_adamw_auxiliaries == "true",
+    "calibration_sha256": calibration_hash,
+    "calibration_metric": calibration_metric,
 }, sort_keys=True) + "\n")
 PY
 

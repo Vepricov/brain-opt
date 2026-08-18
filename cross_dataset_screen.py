@@ -271,11 +271,11 @@ def read_metric_rows(path: Path) -> list[dict[str, Any]]:
             continue
         try:
             row = json.loads(line)
-            step = int(row["step"])
+            step = row["step"]
             data = row["data"]
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise ContractError(f"invalid metrics row {path}:{line_number}") from error
-        if not isinstance(data, dict) or step < 0:
+        if type(step) is not int or step < 0 or not isinstance(data, dict):
             raise ContractError(f"invalid metrics row {path}:{line_number}")
         rows.append({"step": step, "data": data})
     if not rows:
@@ -294,12 +294,14 @@ def _finite_metric(data: Mapping[str, Any], key: str, context: str) -> float:
 
 def validation_metric(data: Mapping[str, Any], source: str, context: str) -> tuple[str, float]:
     candidates = []
+    permitted = {
+        f"val-core/{source}/reward/mean@1",
+        f"val-core/{source}/acc/mean@1",
+    }
     for key, value in data.items():
         if not isinstance(key, str) or not key.startswith("val-core/"):
             continue
-        if not (key.endswith("/reward/mean@1") or key.endswith("/acc/mean@1")):
-            continue
-        if source not in key:
+        if key not in permitted:
             raise ContractError(f"validation source mismatch for {context}: {key!r}")
         candidates.append((key, _finite_metric(data, key, context)))
     if len(candidates) != 1:
@@ -338,6 +340,15 @@ def validate_screen_metrics(path: Path, route: str, source: str) -> dict[str, An
     rows = read_metric_rows(path)
     if max(row["step"] for row in rows) != MAX_STEPS:
         raise ContractError(f"route {route} did not stop exactly at step {MAX_STEPS}")
+    validation_rows = [
+        row
+        for row in rows
+        if any(isinstance(key, str) and key.startswith("val-core/") for key in row["data"])
+    ]
+    if [row["step"] for row in validation_rows] != list(VALIDATION_STEPS):
+        raise ContractError(
+            f"route {route} validation schedule must be exactly {VALIDATION_STEPS}"
+        )
     points = []
     metric_name = None
     for expected_step in VALIDATION_STEPS:
