@@ -673,7 +673,12 @@ def test_runner_and_launcher_wire_preregistered_protocol():
     assert "verl_identity(verl_root, overlay_root)" in launcher
 
 
-def test_compat_shell_parses_and_hash_captures_suppress_import_stdout():
+def test_compat_shell_parses_and_hash_capture_uses_artifact_files():
     subprocess.run(["bash", "-n", str(ROOT / "cloud_verl_compat.sh")], check=True)
     runner = (ROOT / "run_cross_dataset_screen.sh").read_text()
-    assert runner.count("with contextlib.redirect_stdout(sys.stderr):") == 2
+    assert 'manifest_hash_file="$preflight_root/manifest.sha256"' in runner
+    assert 'hash_path.write_text(manifest_sha256 + "\\n")' in runner
+    assert 'manifest_sha256=$(<"$manifest_hash_file")' in runner
+    assert 'write_identity_artifact(run_root / "model-identity.json", model)' in runner
+    assert 'json.loads(Path(sys.argv[1]).read_text())' in runner
+    assert "contextlib.redirect_stdout" not in runner

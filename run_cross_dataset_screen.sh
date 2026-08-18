@@ -104,22 +104,21 @@ with (campaign_root / ".cross-dataset-routing-overlay.lock").open("w") as lock:
 PY
 
 # Verify the pinned manifest, its parquet payloads, source identity, and GPU before model code.
-manifest_sha256=$("$venv_python" - "$manifest" "$dataset" "$data_source" <<'PY'
-import contextlib
+manifest_hash_file="$preflight_root/manifest.sha256"
+"$venv_python" - "$manifest" "$dataset" "$data_source" "$manifest_hash_file" <<'PY' || finish $?
 import sys
 from pathlib import Path
-with contextlib.redirect_stdout(sys.stderr):
-    import torch
-    from collect_cross_dataset_screen import validate_manifest
-manifest_path, dataset, source = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+import torch
+from collect_cross_dataset_screen import validate_manifest
+manifest_path, dataset, source, hash_path = Path(sys.argv[1]), sys.argv[2], sys.argv[3], Path(sys.argv[4])
 manifest, manifest_sha256 = validate_manifest(manifest_path, dataset)
 if manifest["data_source"] != source:
     raise RuntimeError("manifest data source mismatch")
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA is unavailable; model numerical compute on CPU is forbidden")
-print(manifest_sha256)
+hash_path.write_text(manifest_sha256 + "\n")
 PY
-) || finish $?
+manifest_sha256=$(<"$manifest_hash_file")
 [[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid manifest hash"; finish 77; }
 
 # Only claim the permanent run root after bootstrap and every read-only/shared
@@ -132,18 +131,22 @@ status_file="$run_root/status.json"
 write_status running "preflight complete"
 
 # Materialize and immediately verify byte-derived identities before any model load.
-identity_values=$("$venv_python" - "$model_root" "$verl_root" \
-  "$repo_root/routed-scale-source" "$run_root" <<'PY'
-import contextlib
+"$venv_python" - "$model_root" "$verl_root" \
+  "$repo_root/routed-scale-source" "$run_root" <<'PY' || finish $?
 import sys
 from pathlib import Path
-with contextlib.redirect_stdout(sys.stderr):
-    from cross_dataset_screen import model_identity, verl_identity, write_identity_artifact
+from cross_dataset_screen import model_identity, verl_identity, write_identity_artifact
 model_root, verl_root, overlay_root, run_root = map(Path, sys.argv[1:])
 model = model_identity(model_root)
 verl = verl_identity(verl_root, overlay_root)
 write_identity_artifact(run_root / "model-identity.json", model)
 write_identity_artifact(run_root / "verl-identity.json", verl)
+PY
+identity_values=$("$venv_python" - "$run_root/model-identity.json" "$run_root/verl-identity.json" <<'PY'
+import json, sys
+from pathlib import Path
+model = json.loads(Path(sys.argv[1]).read_text())
+verl = json.loads(Path(sys.argv[2]).read_text())
 print(model["identity_sha256"], verl["identity_sha256"])
 PY
 ) || finish $?
