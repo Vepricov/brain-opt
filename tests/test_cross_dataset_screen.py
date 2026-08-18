@@ -834,3 +834,9 @@ def test_compat_shell_parses_and_hash_capture_uses_artifact_files():
     assert 'identity_values=$("$venv_python"' not in runner
     assert 'calibration_values=$("$venv_python"' not in runner
     assert "contextlib.redirect_stdout" not in runner
+
+    direct_runner = (ROOT / "run_cross_dataset_direct_transfer.sh").read_text()
+    assert 'identity_values_file="$run_root/identity-values.txt"' in direct_runner
+    assert "values_path.write_text(" in direct_runner
+    assert 'read -r model_identity_sha256 verl_identity_sha256 extra <"$identity_values_file"' in direct_runner
+    assert 'read -r model_identity_sha256 verl_identity_sha256 < <(' not in direct_runner

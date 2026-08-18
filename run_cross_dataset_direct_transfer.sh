@@ -72,13 +72,22 @@ write_identity_artifact(run_root / "verl-identity.json", verl_identity(Path(verl
 (run_root / "manifest.sha256").write_text(manifest_hash + "\n")
 PY
 read -r manifest_sha256 <"$run_root/manifest.sha256"
-read -r model_identity_sha256 verl_identity_sha256 < <("$venv_python" - "$run_root" <<'PY'
+identity_values_file="$run_root/identity-values.txt"
+"$venv_python" - "$run_root" "$identity_values_file" <<'PY'
 import json, sys
 from pathlib import Path
-r=Path(sys.argv[1])
-print(json.loads((r/'model-identity.json').read_text())['identity_sha256'], json.loads((r/'verl-identity.json').read_text())['identity_sha256'])
-PY
+r = Path(sys.argv[1])
+values_path = Path(sys.argv[2])
+values_path.write_text(
+    json.loads((r / 'model-identity.json').read_text())['identity_sha256']
+    + " "
+    + json.loads((r / 'verl-identity.json').read_text())['identity_sha256']
+    + "\n"
 )
+PY
+read -r model_identity_sha256 verl_identity_sha256 extra <"$identity_values_file"
+[[ -z "${extra:-}" ]]
+rm -f "$identity_values_file"
 "$venv_python" - "$run_root/fixed-transfer.json" "$dataset" "$source_commit" <<'PY'
 import json, sys
 from pathlib import Path
