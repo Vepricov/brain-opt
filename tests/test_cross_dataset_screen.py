@@ -57,7 +57,13 @@ def test_reward_module_loads_without_preinsertion_in_sys_modules():
 
 def test_reward_accepts_verl_runtime_metadata_without_weakening_provenance_schema():
     extra_info = _reward_extra("cross_dataset/svamp")
-    extra_info.update({"num_turns": 1, "rollout_reward_scores": {}})
+    extra_info.update(
+        {
+            "num_turns": 1,
+            "rollout_reward_scores": {},
+            "raw_prompt": [{"role": "user", "content": "fixture"}],
+        }
+    )
 
     assert compute_score(
         "cross_dataset/svamp",

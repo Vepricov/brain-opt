@@ -180,10 +180,10 @@ def compute_score(
     expected_keys = {"data_source", "dataset", "split", "index", "id"}
     if dataset == "arc_easy":
         expected_keys |= {"choice_labels", "original_choice_labels"}
-    # VERL's NaiveRewardManager enriches the dataset-owned mapping immediately
+    # VERL's agent and reward loops enrich the dataset-owned mapping immediately
     # before calling the custom scorer. Keep the provenance contract exact after
-    # removing only those two known runtime fields.
-    runtime_keys = {"num_turns", "rollout_reward_scores"}
+    # removing only those known runtime fields.
+    runtime_keys = {"num_turns", "raw_prompt", "rollout_reward_scores"}
     provenance_keys = set(extra_info) - runtime_keys
     if provenance_keys != expected_keys or extra_info.get("dataset") != dataset:
         raise ContractError("reward extra_info provenance schema mismatch")
