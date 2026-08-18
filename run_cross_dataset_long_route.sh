@@ -13,6 +13,11 @@ repo_root=$(cd "$(dirname "$0")" && pwd)
 source_commit=${RL_MUON_SOURCE_COMMIT:?RL_MUON_SOURCE_COMMIT is required}
 [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$source_commit" ]] || { echo source_commit_mismatch; exit 73; }
 campaign_root=${RL_MUON_CAMPAIGN_ROOT:?RL_MUON_CAMPAIGN_ROOT is required}
+run_attempt=${RL_MUON_RUN_ATTEMPT:-}
+if [[ -n "$run_attempt" && ! "$run_attempt" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
+  echo invalid_run_attempt
+  exit 64
+fi
 verl_root="$campaign_root/verl"
 venv_root="$campaign_root/venv"
 model_root="$campaign_root/models/qwen2.5-0.5b-instruct"
@@ -20,7 +25,7 @@ data_root="$campaign_root/data/cross-dataset/$dataset"
 manifest="$data_root/manifest.json"
 launcher="$repo_root/routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_cross_dataset_screen.sh"
 reward_path="$repo_root/cross_dataset_screen.py"
-run_root="$campaign_root/cross_dataset_long_${dataset}_${route}_seed0_${total_steps}_${source_commit:0:7}"
+run_root="$campaign_root/cross_dataset_long_${dataset}_${route}_seed0_${total_steps}_${source_commit:0:7}${run_attempt:+_$run_attempt}"
 mkdir "$run_root"
 status="$run_root/status.json"
 finish() {
