@@ -183,7 +183,13 @@ def compute_score(
     # VERL's agent and reward loops enrich the dataset-owned mapping immediately
     # before calling the custom scorer. Keep the provenance contract exact after
     # removing only those known runtime fields.
-    runtime_keys = {"num_turns", "raw_prompt", "rollout_reward_scores"}
+    runtime_keys = {
+        "num_turns",
+        "raw_prompt",
+        "rollout_reward_scores",
+        "tool_rewards",
+        "turn_scores",
+    }
     provenance_keys = set(extra_info) - runtime_keys
     if provenance_keys != expected_keys or extra_info.get("dataset") != dataset:
         raise ContractError("reward extra_info provenance schema mismatch")

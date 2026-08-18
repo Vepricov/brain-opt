@@ -60,6 +60,8 @@ def test_reward_accepts_verl_runtime_metadata_without_weakening_provenance_schem
     extra_info.update(
         {
             "num_turns": 1,
+            "turn_scores": [],
+            "tool_rewards": [],
             "rollout_reward_scores": {},
             "raw_prompt": [{"role": "user", "content": "fixture"}],
         }
