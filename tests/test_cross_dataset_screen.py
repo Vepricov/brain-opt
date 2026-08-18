@@ -823,6 +823,14 @@ def test_compat_shell_parses_and_hash_capture_uses_artifact_files():
     assert 'manifest_hash_file="$preflight_root/manifest.sha256"' in runner
     assert 'hash_path.write_text(manifest_sha256 + "\\n")' in runner
     assert 'manifest_sha256=$(<"$manifest_hash_file")' in runner
+    assert 'rm -f "$manifest_hash_file"' in runner
     assert 'write_identity_artifact(run_root / "model-identity.json", model)' in runner
-    assert 'json.loads(Path(sys.argv[1]).read_text())' in runner
+    assert 'json.loads(model_path.read_text())' in runner
+    assert 'identity_values_file="$run_root/identity-values.txt"' in runner
+    assert 'values_path.write_text(' in runner
+    assert 'read -r model_identity_sha256 verl_identity_sha256 extra <"$identity_values_file"' in runner
+    assert 'calibration_values_file="$run_root/calibration-values.txt"' in runner
+    assert 'read -r muon_lr lion_lr calibration_sha256 extra <"$calibration_values_file"' in runner
+    assert 'identity_values=$("$venv_python"' not in runner
+    assert 'calibration_values=$("$venv_python"' not in runner
     assert "contextlib.redirect_stdout" not in runner

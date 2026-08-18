@@ -120,6 +120,7 @@ hash_path.write_text(manifest_sha256 + "\n")
 PY
 manifest_sha256=$(<"$manifest_hash_file")
 [[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid manifest hash"; finish 77; }
+rm -f "$manifest_hash_file" || finish $?
 
 # Only claim the permanent run root after bootstrap and every read-only/shared
 # compatibility, artifact, interpreter, source, and CUDA preflight has passed.
@@ -142,15 +143,18 @@ verl = verl_identity(verl_root, overlay_root)
 write_identity_artifact(run_root / "model-identity.json", model)
 write_identity_artifact(run_root / "verl-identity.json", verl)
 PY
-identity_values=$("$venv_python" - "$run_root/model-identity.json" "$run_root/verl-identity.json" <<'PY'
+identity_values_file="$run_root/identity-values.txt"
+"$venv_python" - "$run_root/model-identity.json" "$run_root/verl-identity.json" \
+  "$identity_values_file" <<'PY' || finish $?
 import json, sys
 from pathlib import Path
-model = json.loads(Path(sys.argv[1]).read_text())
-verl = json.loads(Path(sys.argv[2]).read_text())
-print(model["identity_sha256"], verl["identity_sha256"])
+model_path, verl_path, values_path = map(Path, sys.argv[1:])
+model = json.loads(model_path.read_text())
+verl = json.loads(verl_path.read_text())
+values_path.write_text(f'{model["identity_sha256"]} {verl["identity_sha256"]}\n')
 PY
-) || finish $?
-read -r model_identity_sha256 verl_identity_sha256 extra <<<"$identity_values"
+read -r model_identity_sha256 verl_identity_sha256 extra <"$identity_values_file"
+rm -f "$identity_values_file" || finish $?
 [[ -z "${extra:-}" && "$model_identity_sha256" =~ ^[0-9a-f]{64}$ && \
   "$verl_identity_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid implementation identities"; finish 65; }
 chmod 0444 "$run_root/model-identity.json" "$run_root/verl-identity.json" || finish $?
@@ -172,12 +176,13 @@ calibration="$run_root/calibration.json"
   --routing-overlay-root "$repo_root/routed-scale-source" \
   --seed 0 \
   --max-response-length 256 || finish $?
-calibration_values=$("$venv_python" - "$calibration" "$dataset" "$data_source" \
+calibration_values_file="$run_root/calibration-values.txt"
+"$venv_python" - "$calibration" "$dataset" "$data_source" \
   "$source_commit" "$manifest_sha256" "$data_root/train.parquet" \
-  "$model_identity_sha256" "$verl_identity_sha256" <<'PY'
+  "$model_identity_sha256" "$verl_identity_sha256" "$calibration_values_file" <<'PY' || finish $?
 import hashlib, json, math, sys
 from pathlib import Path
-path, dataset, source, commit, manifest_hash, train_path, model_hash, verl_hash = sys.argv[1:]
+path, dataset, source, commit, manifest_hash, train_path, model_hash, verl_hash, values_path = sys.argv[1:]
 payload = Path(path).read_bytes()
 artifact = json.loads(payload)
 expected = {
@@ -211,10 +216,13 @@ for route in ("muon", "lion"):
         raise RuntimeError(f"{route} did not jointly match AdamW mean and q95 KL")
 if artifact.get("gates", {}).get("passed") is not True:
     raise RuntimeError("joint calibration gate failed")
-print(artifact["chosen_muon_learning_rate"], artifact["chosen_lion_learning_rate"], hashlib.sha256(payload).hexdigest())
+Path(values_path).write_text(
+    f'{artifact["chosen_muon_learning_rate"]} {artifact["chosen_lion_learning_rate"]} '
+    f'{hashlib.sha256(payload).hexdigest()}\n'
+)
 PY
-) || finish $?
-read -r muon_lr lion_lr calibration_sha256 extra <<<"$calibration_values"
+read -r muon_lr lion_lr calibration_sha256 extra <"$calibration_values_file"
+rm -f "$calibration_values_file" || finish $?
 [[ -z "${extra:-}" && "$calibration_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid calibration values"; finish 65; }
 chmod 0444 "$calibration" || finish $?
 
