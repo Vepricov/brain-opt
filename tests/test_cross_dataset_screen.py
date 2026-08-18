@@ -395,7 +395,7 @@ def _write_calibration(
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _write_implementation_identities(tmp_path, monkeypatch):
+def _write_implementation_identities(tmp_path, monkeypatch, *, include_gitlink=False):
     model_root = tmp_path / "model"
     model_root.mkdir()
     (model_root / "config.json").write_text('{"model_type":"qwen2"}\n')
@@ -433,6 +433,15 @@ def _write_implementation_identities(tmp_path, monkeypatch):
     dangling.symlink_to("../../.agent/skills/issue")
     subprocess.run(["git", "init", "-q", str(verl_root)], check=True)
     subprocess.run(["git", "-C", str(verl_root), "add", "."], check=True)
+    if include_gitlink:
+        gitlink_oid = "1" * 40
+        subprocess.run(
+            [
+                "git", "-C", str(verl_root), "update-index", "--add", "--cacheinfo",
+                f"160000,{gitlink_oid},recipe",
+            ],
+            check=True,
+        )
     subprocess.run(
         ["git", "-C", str(verl_root), "-c", "user.name=Test", "-c",
          "user.email=test@example.invalid", "commit", "-qm", "fixture"],
@@ -458,6 +467,102 @@ def test_verl_identity_hashes_dangling_symlink_target(tmp_path, monkeypatch):
     dangling.symlink_to("../../.agent/skills/other-issue")
     changed = verl_identity(verl_root, overlay_root)
     assert changed["identity_sha256"] != original
+
+
+def test_verl_identity_hashes_uninitialized_gitlink(tmp_path, monkeypatch):
+    _, _, _, _, identity = _write_implementation_identities(
+        tmp_path, monkeypatch, include_gitlink=True
+    )
+    assert isinstance(identity, str)
+
+    entry = cross_dataset_screen._tracked_entry_identity(
+        tmp_path, "recipe", "160000", "1" * 40
+    )
+    assert entry == {
+        "path": "recipe",
+        "kind": "gitlink",
+        "index_mode": "160000",
+        "git_oid": "1" * 40,
+        "worktree_state": "uninitialized",
+    }
+
+
+def test_tracked_gitlink_rejects_symlink_to_directory(tmp_path):
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "recipe").symlink_to(tmp_path / "outside", target_is_directory=True)
+    with pytest.raises(ContractError, match="invalid gitlink worktree path"):
+        cross_dataset_screen._tracked_entry_identity(
+            tmp_path, "recipe", "160000", "1" * 40
+        )
+
+
+def test_tracked_gitlink_rejects_populated_non_repository(tmp_path):
+    (tmp_path / "recipe").mkdir()
+    (tmp_path / "recipe/attacker.py").write_text("payload")
+    with pytest.raises(ContractError, match="invalid gitlink worktree path"):
+        cross_dataset_screen._tracked_entry_identity(
+            tmp_path, "recipe", "160000", "1" * 40
+        )
+
+
+def test_tracked_gitlink_rejects_initialized_checkout(tmp_path):
+    recipe = tmp_path / "recipe"
+    subprocess.run(["git", "init", "-q", str(recipe)], check=True)
+    (recipe / "tracked").write_text("payload")
+    subprocess.run(["git", "-C", str(recipe), "add", "tracked"], check=True)
+    subprocess.run(
+        [
+            "git", "-C", str(recipe), "-c", "user.name=Test", "-c",
+            "user.email=test@example.invalid", "commit", "-qm", "fixture",
+        ],
+        check=True,
+    )
+    with pytest.raises(ContractError, match="initialized gitlink is not allowed"):
+        cross_dataset_screen._tracked_entry_identity(
+            tmp_path, "recipe", "160000", "1" * 40
+        )
+
+
+@pytest.mark.parametrize(
+    ("mode", "oid"),
+    [
+        ("nonsense", "1" * 40),
+        ("100644", "not-an-oid"),
+        ("100644", "1" * 39),
+    ],
+)
+def test_tracked_entry_rejects_invalid_index_metadata(tmp_path, mode, oid):
+    (tmp_path / "ordinary").write_text("payload")
+    with pytest.raises(ContractError, match="invalid VERL index"):
+        cross_dataset_screen._tracked_entry_identity(tmp_path, "ordinary", mode, oid)
+
+
+def test_tracked_entry_rejects_index_mode_worktree_mismatch(tmp_path):
+    (tmp_path / "ordinary").write_text("payload")
+    with pytest.raises(ContractError, match="index mode/worktree mismatch"):
+        cross_dataset_screen._tracked_entry_identity(
+            tmp_path, "ordinary", "120000", "1" * 40
+        )
+
+
+@pytest.mark.parametrize(("index_mode", "worktree_mode"), [("100644", 0o755), ("100755", 0o644)])
+def test_tracked_entry_rejects_executable_bit_mismatch(tmp_path, index_mode, worktree_mode):
+    path = tmp_path / "ordinary"
+    path.write_text("payload")
+    path.chmod(worktree_mode)
+    with pytest.raises(ContractError, match="executable-bit mismatch"):
+        cross_dataset_screen._tracked_entry_identity(
+            tmp_path, "ordinary", index_mode, "1" * 40
+        )
+
+
+def test_parse_tracked_entries_rejects_malformed_and_unmerged_records():
+    with pytest.raises(ContractError, match="invalid VERL index entry"):
+        cross_dataset_screen._parse_tracked_entries(b"malformed\0")
+    with pytest.raises(ContractError, match="unmerged VERL index entry"):
+        cross_dataset_screen._parse_tracked_entries(
+            f"100644 {'1' * 40} 1\tconflicted\0".encode()
+        )
 
 
 def test_verl_identity_rejects_file_symlink_overlay_collision(tmp_path, monkeypatch):

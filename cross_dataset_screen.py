@@ -345,6 +345,64 @@ def _file_identity(root: Path, relative_path: str) -> dict[str, Any]:
     }
 
 
+def _tracked_entry_identity(
+    root: Path, relative_path: str, index_mode: str, index_oid: str
+) -> dict[str, Any]:
+    allowed_modes = {"100644", "100755", "120000", "160000"}
+    if index_mode not in allowed_modes or re.fullmatch(
+        r"(?:[0-9a-f]{40}|[0-9a-f]{64})", index_oid
+    ) is None:
+        raise ContractError(f"invalid VERL index metadata: {relative_path}")
+    path = root / relative_path
+    if index_mode == "160000":
+        if path.is_symlink() or (os.path.lexists(path) and not path.is_dir()):
+            raise ContractError(f"invalid gitlink worktree path: {path}")
+        git_metadata = path / ".git"
+        if os.path.lexists(git_metadata):
+            raise ContractError(f"initialized gitlink is not allowed: {path}")
+        if path.is_dir() and any(path.iterdir()):
+            raise ContractError(f"invalid gitlink worktree path: {path}")
+        return {
+            "path": relative_path,
+            "kind": "gitlink",
+            "index_mode": index_mode,
+            "git_oid": index_oid,
+            "worktree_state": "uninitialized",
+        }
+    identity = _file_identity(root, relative_path)
+    expected_kind = "symlink" if index_mode == "120000" else "file"
+    if identity["kind"] != expected_kind:
+        raise ContractError(f"VERL index mode/worktree mismatch: {relative_path}")
+    if expected_kind == "file":
+        executable = bool(path.stat().st_mode & 0o100)
+        if executable != (index_mode == "100755"):
+            raise ContractError(f"VERL executable-bit mismatch: {relative_path}")
+        identity["executable"] = executable
+    return {
+        **identity,
+        "index_mode": index_mode,
+        "index_oid": index_oid,
+    }
+
+
+def _parse_tracked_entries(tracked_output: bytes) -> list[tuple[str, str, str]]:
+    tracked_entries = []
+    for record in tracked_output.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, path = record.split(b"\t", 1)
+            mode, oid, stage = metadata.decode("ascii").split()
+            relative_path = path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ContractError("invalid VERL index entry") from error
+        if stage != "0":
+            raise ContractError(f"unmerged VERL index entry: {relative_path}")
+        tracked_entries.append((relative_path, mode, oid))
+    tracked_entries.sort()
+    return tracked_entries
+
+
 def model_identity(model_root: Path) -> dict[str, Any]:
     """Hash every file in the resolved local model snapshot deterministically."""
     if not model_root.is_dir():
@@ -395,20 +453,23 @@ def verl_identity(verl_root: Path, overlay_root: Path) -> dict[str, Any]:
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         tracked_output = subprocess.run(
-            ["git", "-C", str(verl_root), "ls-files", "-z"],
+            ["git", "-C", str(verl_root), "ls-files", "--stage", "-z"],
             check=True, capture_output=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         raise ContractError(f"cannot identify VERL checkout: {verl_root}") from error
     if commit != PINNED_VERL_COMMIT:
         raise ContractError(f"VERL commit mismatch: {commit!r}")
-    tracked_paths = sorted(
-        path.decode("utf-8") for path in tracked_output.split(b"\0") if path
-    )
-    if not tracked_paths:
+    tracked_entries = _parse_tracked_entries(tracked_output)
+    if not tracked_entries:
         raise ContractError("VERL checkout has no tracked files")
     tracked_worktree_sha256 = _identity_hash(
-        {"files": [_file_identity(verl_root, path) for path in tracked_paths]}
+        {
+            "files": [
+                _tracked_entry_identity(verl_root, path, mode, oid)
+                for path, mode, oid in tracked_entries
+            ]
+        }
     )
     files = []
     for relative_path in (*VERL_CRITICAL_PATHS, *ROUTING_OVERLAY_PATHS):
