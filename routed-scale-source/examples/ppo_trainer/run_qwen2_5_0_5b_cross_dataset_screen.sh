@@ -68,7 +68,7 @@ if [[ "$ROUTE" == adamw_actor ]]; then
   ACTOR_USES_ADAMW_AUXILIARIES=false
 fi
 
-TOTAL_STEPS=$([[ "$PHASE" == gate ]] && echo 1 || echo 50)
+TOTAL_STEPS=$([[ "$PHASE" == gate ]] && echo 1 || echo "${SCREEN_TOTAL_STEPS:-50}")
 RUN_NAME="qwen2.5-0.5b_${DATASET}_ppo_${PHASE}_${ROUTE}_seed0"
 RUN_DIR="$OUTPUT_ROOT/$RUN_NAME"
 mkdir -p "$RUN_DIR"
