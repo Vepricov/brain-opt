@@ -23,10 +23,13 @@ PINNED_VERL_COMMIT = "7aed6b230776f963fa09509c10d9c3a767d1102c"
 VERL_CRITICAL_PATHS = (
     "verl/trainer/main_ppo.py",
     "verl/trainer/ppo/ray_trainer.py",
-    "verl/workers/fsdp_workers.py",
+    "verl/utils/attention_utils.py",
+    "verl/utils/model.py",
+    "verl/workers/engine_workers.py",
+    "verl/workers/engine/fsdp/transformer_impl.py",
     "verl/workers/rollout/vllm_rollout/vllm_async_server.py",
     "verl/workers/rollout/vllm_rollout/utils.py",
-    "verl/utils/attention_utils.py",
+    "verl/workers/rollout/vllm_rollout/vllm_rollout.py",
 )
 ROUTING_OVERLAY_PATHS = (
     "verl/utils/optimizers.py",

@@ -32,6 +32,20 @@ from cross_dataset_screen import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_verl_critical_paths_match_pinned_v080_runtime_layout():
+    assert set(cross_dataset_screen.VERL_CRITICAL_PATHS) == {
+        "verl/trainer/main_ppo.py",
+        "verl/trainer/ppo/ray_trainer.py",
+        "verl/utils/attention_utils.py",
+        "verl/utils/model.py",
+        "verl/workers/engine_workers.py",
+        "verl/workers/engine/fsdp/transformer_impl.py",
+        "verl/workers/rollout/vllm_rollout/utils.py",
+        "verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+        "verl/workers/rollout/vllm_rollout/vllm_rollout.py",
+    }
+
+
 def _reward_extra(source):
     dataset = source.removeprefix("cross_dataset/")
     extra = {
