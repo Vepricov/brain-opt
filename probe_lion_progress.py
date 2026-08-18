@@ -25,6 +25,7 @@ def read_jsonl(path: Path) -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", required=True)
+    parser.add_argument("--route", action="append")
     args = parser.parse_args()
     root = Path(args.run_root)
     if not root.is_dir():
@@ -41,7 +42,7 @@ def main() -> None:
     if status_path.is_file():
         snapshot["status"] = json.loads(status_path.read_text())
 
-    route_names = ("lion_actor_adam_critic", "lion_actor_muon_critic")
+    route_names = tuple(args.route or ("lion_actor_adam_critic", "lion_actor_muon_critic"))
     for route in route_names:
         route_root = root / route
         metrics_paths = list(route_root.rglob("metrics.jsonl")) if route_root.is_dir() else []
