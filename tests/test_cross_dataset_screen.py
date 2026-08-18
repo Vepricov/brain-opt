@@ -845,5 +845,5 @@ def test_compat_shell_parses_and_hash_capture_uses_artifact_files():
         ROOT
         / "routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_cross_dataset_screen.sh"
     ).read_text()
-    assert "actor_rollout_ref.model.override_config.attn_implementation=sdpa" in launcher
-    assert "critic.model.override_config.attn_implementation=sdpa" in launcher
+    assert "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" in launcher
+    assert "+critic.model.override_config.attn_implementation=sdpa" in launcher
