@@ -140,6 +140,7 @@ python3 -m verl.trainer.main_ppo \
   data.seed=0 \
   actor_rollout_ref.model.path="$MODEL_PATH" \
   actor_rollout_ref.model.use_remove_padding=False \
+  actor_rollout_ref.model.override_config.attn_implementation=sdpa \
   actor_rollout_ref.model.enable_gradient_checkpointing=True \
   actor_rollout_ref.actor.optim.optimizer="$ACTOR_OPT" \
   actor_rollout_ref.actor.optim.optimizer_impl="$ACTOR_OPT_IMPL" \
@@ -159,6 +160,7 @@ python3 -m verl.trainer.main_ppo \
   actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
   critic.model.path="$MODEL_PATH" \
   critic.model.use_remove_padding=False \
+  critic.model.override_config.attn_implementation=sdpa \
   critic.model.enable_gradient_checkpointing=True \
   critic.optim.optimizer=AdamW \
   critic.optim.optimizer_impl=torch.optim \

@@ -840,3 +840,10 @@ def test_compat_shell_parses_and_hash_capture_uses_artifact_files():
     assert "values_path.write_text(" in direct_runner
     assert 'read -r model_identity_sha256 verl_identity_sha256 extra <"$identity_values_file"' in direct_runner
     assert 'read -r model_identity_sha256 verl_identity_sha256 < <(' not in direct_runner
+
+    launcher = (
+        ROOT
+        / "routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_cross_dataset_screen.sh"
+    ).read_text()
+    assert "actor_rollout_ref.model.override_config.attn_implementation=sdpa" in launcher
+    assert "critic.model.override_config.attn_implementation=sdpa" in launcher
