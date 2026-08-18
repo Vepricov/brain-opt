@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -324,10 +325,21 @@ def _identity_hash(payload: Mapping[str, Any]) -> str:
 
 def _file_identity(root: Path, relative_path: str) -> dict[str, Any]:
     path = root / relative_path
+    if path.is_symlink():
+        target = os.readlink(path)
+        payload = os.fsencode(target)
+        return {
+            "path": relative_path,
+            "kind": "symlink",
+            "target": target,
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
     if not path.is_file():
         raise ContractError(f"missing identity file: {path}")
     return {
         "path": relative_path,
+        "kind": "file",
         "size": path.stat().st_size,
         "sha256": file_sha256(path),
     }
@@ -403,7 +415,8 @@ def verl_identity(verl_root: Path, overlay_root: Path) -> dict[str, Any]:
         active = _file_identity(verl_root, relative_path)
         if relative_path in ROUTING_OVERLAY_PATHS:
             overlay = _file_identity(overlay_root, relative_path)
-            if active["sha256"] != overlay["sha256"] or active["size"] != overlay["size"]:
+            comparable_keys = ("kind", "size", "sha256", "target")
+            if any(active.get(key) != overlay.get(key) for key in comparable_keys):
                 raise ContractError(f"routing overlay is not active: {relative_path}")
             active["overlay_sha256"] = overlay["sha256"]
         files.append(active)

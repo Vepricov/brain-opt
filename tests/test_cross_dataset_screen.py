@@ -428,6 +428,9 @@ def _write_implementation_identities(tmp_path, monkeypatch):
             overlay = overlay_root / relative
             overlay.parent.mkdir(parents=True, exist_ok=True)
             overlay.write_bytes(payload)
+    dangling = verl_root / ".claude/skills/issue"
+    dangling.parent.mkdir(parents=True, exist_ok=True)
+    dangling.symlink_to("../../.agent/skills/issue")
     subprocess.run(["git", "init", "-q", str(verl_root)], check=True)
     subprocess.run(["git", "-C", str(verl_root), "add", "."], check=True)
     subprocess.run(
@@ -445,6 +448,28 @@ def _write_implementation_identities(tmp_path, monkeypatch):
     write_identity_artifact(tmp_path / "model-identity.json", model)
     write_identity_artifact(tmp_path / "verl-identity.json", verl)
     return model_root, verl_root, overlay_root, model["identity_sha256"], verl["identity_sha256"]
+
+
+def test_verl_identity_hashes_dangling_symlink_target(tmp_path, monkeypatch):
+    _, verl_root, overlay_root, _, original = _write_implementation_identities(tmp_path, monkeypatch)
+    dangling = verl_root / ".claude/skills/issue"
+    assert dangling.is_symlink()
+    dangling.unlink()
+    dangling.symlink_to("../../.agent/skills/other-issue")
+    changed = verl_identity(verl_root, overlay_root)
+    assert changed["identity_sha256"] != original
+
+
+def test_verl_identity_rejects_file_symlink_overlay_collision(tmp_path, monkeypatch):
+    _, verl_root, overlay_root, _, _ = _write_implementation_identities(tmp_path, monkeypatch)
+    relative = cross_dataset_screen.ROUTING_OVERLAY_PATHS[0]
+    active = verl_root / relative
+    overlay = overlay_root / relative
+    payload = active.read_text()
+    overlay.unlink()
+    overlay.symlink_to(payload)
+    with pytest.raises(ContractError, match="routing overlay is not active"):
+        verl_identity(verl_root, overlay_root)
 
 
 def _write_manifest(tmp_path, dataset="svamp"):
