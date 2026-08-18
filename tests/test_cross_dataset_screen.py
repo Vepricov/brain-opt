@@ -59,6 +59,7 @@ def test_reward_accepts_verl_runtime_metadata_without_weakening_provenance_schem
     extra_info = _reward_extra("cross_dataset/svamp")
     extra_info.update(
         {
+            "global_steps": 0,
             "num_turns": 1,
             "turn_scores": [],
             "tool_rewards": [],

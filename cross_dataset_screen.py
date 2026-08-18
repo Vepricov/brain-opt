@@ -184,6 +184,7 @@ def compute_score(
     # before calling the custom scorer. Keep the provenance contract exact after
     # removing only those known runtime fields.
     runtime_keys = {
+        "global_steps",
         "num_turns",
         "raw_prompt",
         "rollout_reward_scores",
