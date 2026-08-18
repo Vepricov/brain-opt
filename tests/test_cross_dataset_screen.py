@@ -671,3 +671,9 @@ def test_runner_and_launcher_wire_preregistered_protocol():
     assert "verify_identity_artifact" in launcher
     assert "model_identity(model_root)" in launcher
     assert "verl_identity(verl_root, overlay_root)" in launcher
+
+
+def test_compat_shell_parses_and_hash_captures_suppress_import_stdout():
+    subprocess.run(["bash", "-n", str(ROOT / "cloud_verl_compat.sh")], check=True)
+    runner = (ROOT / "run_cross_dataset_screen.sh").read_text()
+    assert runner.count("with contextlib.redirect_stdout(sys.stderr):") == 2

@@ -105,10 +105,12 @@ PY
 
 # Verify the pinned manifest, its parquet payloads, source identity, and GPU before model code.
 manifest_sha256=$("$venv_python" - "$manifest" "$dataset" "$data_source" <<'PY'
+import contextlib
 import sys
 from pathlib import Path
-import torch
-from collect_cross_dataset_screen import validate_manifest
+with contextlib.redirect_stdout(sys.stderr):
+    import torch
+    from collect_cross_dataset_screen import validate_manifest
 manifest_path, dataset, source = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 manifest, manifest_sha256 = validate_manifest(manifest_path, dataset)
 if manifest["data_source"] != source:
@@ -132,9 +134,11 @@ write_status running "preflight complete"
 # Materialize and immediately verify byte-derived identities before any model load.
 identity_values=$("$venv_python" - "$model_root" "$verl_root" \
   "$repo_root/routed-scale-source" "$run_root" <<'PY'
+import contextlib
 import sys
 from pathlib import Path
-from cross_dataset_screen import model_identity, verl_identity, write_identity_artifact
+with contextlib.redirect_stdout(sys.stderr):
+    from cross_dataset_screen import model_identity, verl_identity, write_identity_artifact
 model_root, verl_root, overlay_root, run_root = map(Path, sys.argv[1:])
 model = model_identity(model_root)
 verl = verl_identity(verl_root, overlay_root)
