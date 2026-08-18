@@ -164,6 +164,32 @@ pytest -q
 `lr=1e-3`, the `scale_lr` mapping, factory name resolution and the
 public API.
 
+## Preregistered cross-dataset actor screen
+
+`prepare_cross_dataset.py` converts pinned SVAMP and ARC-Easy revisions into
+deterministically ordered VERL parquet files. SVAMP uses its official test split
+and ARC-Easy uses its official validation split; the preparer rejects ID overlap
+with training data and writes a hash-bound manifest.
+
+The GPU-only runner compares AdamW, Muon, and Lion actors with an AdamW critic:
+
+```bash
+python prepare_cross_dataset.py svamp /campaign/data/cross-dataset/svamp
+python prepare_cross_dataset.py arc_easy /campaign/data/cross-dataset/arc_easy
+RL_MUON_SOURCE_COMMIT=$(git rev-parse HEAD) \
+RL_MUON_CAMPAIGN_ROOT=/campaign \
+RL_MUON_LION_LR=... \
+RL_MUON_LION_CALIBRATION_SHA256=... \
+./run_cross_dataset_screen.sh screen svamp 0
+```
+
+The runner refuses CPU model execution. Before any 50-step route starts it runs
+AdamW validation at step 0 and a real PPO step 1, then fails closed on zero
+baseline reward, ambiguous parsing, missing/non-finite safety metrics, or any
+seed/source/route/commit/manifest mismatch. Fresh screen routes validate only at
+steps 0, 25, and 50, retain rollout old logprobs and reference-policy logprobs,
+and disable periodic checkpoints.
+
 ## License
 
 Apache-2.0.
