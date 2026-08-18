@@ -16,8 +16,16 @@ DATA_MANIFEST_SHA256=${DATA_MANIFEST_SHA256:?Set DATA_MANIFEST_SHA256}
 LION_ACTOR_LR=${LION_ACTOR_LR:-}
 MUON_ACTOR_LR=${MUON_ACTOR_LR:-}
 CALIBRATION_SHA256=${CALIBRATION_SHA256:?Set the per-dataset calibration artifact hash}
+MODEL_IDENTITY_SHA256=${MODEL_IDENTITY_SHA256:?Set the verified model snapshot hash}
+VERL_IDENTITY_SHA256=${VERL_IDENTITY_SHA256:?Set the verified VERL implementation hash}
+MODEL_IDENTITY_ARTIFACT=${MODEL_IDENTITY_ARTIFACT:?Set the model identity artifact}
+VERL_IDENTITY_ARTIFACT=${VERL_IDENTITY_ARTIFACT:?Set the VERL identity artifact}
+VERL_ROOT=${VERL_ROOT:?Set the active VERL checkout}
+ROUTING_OVERLAY_ROOT=${ROUTING_OVERLAY_ROOT:?Set the routing overlay root}
 CALIBRATION_METRIC=exact_full_categorical_KL_old_to_new_on_occupied_response_states
 [[ "$CALIBRATION_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid calibration hash" >&2; exit 64; }
+[[ "$MODEL_IDENTITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid model identity hash" >&2; exit 64; }
+[[ "$VERL_IDENTITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid VERL identity hash" >&2; exit 64; }
 
 [[ "$SEED" == 0 ]] || { echo "cross-dataset screen requires seed 0" >&2; exit 64; }
 case "$PHASE" in gate|screen) ;; *) echo "unsupported PHASE=$PHASE" >&2; exit 64 ;; esac
@@ -64,15 +72,32 @@ RUN_NAME="qwen2.5-0.5b_${DATASET}_ppo_${PHASE}_${ROUTE}_seed0"
 RUN_DIR="$OUTPUT_ROOT/$RUN_NAME"
 mkdir -p "$RUN_DIR"
 export VERL_FILE_LOGGER_PATH="$RUN_DIR/metrics.jsonl"
+python3 - "$MODEL_PATH" "$VERL_ROOT" "$ROUTING_OVERLAY_ROOT" \
+  "$MODEL_IDENTITY_ARTIFACT" "$VERL_IDENTITY_ARTIFACT" \
+  "$MODEL_IDENTITY_SHA256" "$VERL_IDENTITY_SHA256" <<'PY'
+import sys
+from pathlib import Path
+from cross_dataset_screen import model_identity, verl_identity, verify_identity_artifact
+model_root, verl_root, overlay_root, model_artifact, verl_artifact = map(Path, sys.argv[1:6])
+expected_model, expected_verl = sys.argv[6:]
+observed_model = verify_identity_artifact(model_artifact, model_identity(model_root))
+observed_verl = verify_identity_artifact(
+    verl_artifact, verl_identity(verl_root, overlay_root)
+)
+if observed_model != expected_model or observed_verl != expected_verl:
+    raise RuntimeError("implementation identity argument mismatch")
+PY
 python3 - "$RUN_DIR/run-provenance.json" "$PHASE" "$ROUTE" "$DATASET" \
   "$DATA_SOURCE" "$SOURCE_COMMIT" "$DATA_MANIFEST_SHA256" "$ACTOR_OPT" \
   "$ACTOR_LR" "$ACTOR_ROUTE_DESCRIPTION" "$ACTOR_PARAMETER_ROUTING" \
-  "$ACTOR_USES_ADAMW_AUXILIARIES" "$CALIBRATION_SHA256" "$CALIBRATION_METRIC" <<'PY'
+  "$ACTOR_USES_ADAMW_AUXILIARIES" "$CALIBRATION_SHA256" "$CALIBRATION_METRIC" \
+  "$MODEL_IDENTITY_SHA256" "$VERL_IDENTITY_SHA256" <<'PY'
 import json, pathlib, sys
 (
     path, phase, route, dataset, data_source, source_commit,
     manifest_sha256, actor_optimizer, actor_lr, route_description,
     parameter_routing, uses_adamw_auxiliaries, calibration_hash, calibration_metric,
+    model_identity_hash, verl_identity_hash,
 ) = sys.argv[1:]
 pathlib.Path(path).write_text(json.dumps({
     "protocol": "cross-dataset-actor-screen-v1",
@@ -93,6 +118,8 @@ pathlib.Path(path).write_text(json.dumps({
     "actor_uses_adamw_auxiliaries": uses_adamw_auxiliaries == "true",
     "calibration_sha256": calibration_hash,
     "calibration_metric": calibration_metric,
+    "model_snapshot_sha256": model_identity_hash,
+    "verl_implementation_sha256": verl_identity_hash,
 }, sort_keys=True) + "\n")
 PY
 

@@ -17,6 +17,12 @@ import numpy as np
 import torch
 from torch import nn
 
+from cross_dataset_screen import (
+    model_identity,
+    verl_identity,
+    verify_identity_artifact,
+)
+
 MATCH_RELATIVE_TOLERANCE = 0.10
 CANDIDATE_MULTIPLIERS = (0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0)
 CALIBRATION_METRIC = "exact_full_categorical_KL_old_to_new_on_occupied_response_states"
@@ -224,10 +230,6 @@ def restore_with_gradients(
 
 
 def main() -> None:
-    from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
-
-    Lion, MuonWithAuxAdamW = load_optimizers()
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--train-file", required=True)
@@ -236,6 +238,10 @@ def main() -> None:
     parser.add_argument("--data-source", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--model-identity-artifact", required=True)
+    parser.add_argument("--verl-identity-artifact", required=True)
+    parser.add_argument("--verl-root", required=True)
+    parser.add_argument("--routing-overlay-root", required=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-prompt-length", type=int, default=512)
@@ -244,8 +250,18 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--clip-coef", type=float, default=0.2)
     args = parser.parse_args()
+    model_identity_sha256 = verify_identity_artifact(
+        Path(args.model_identity_artifact), model_identity(Path(args.model_path))
+    )
+    verl_identity_sha256 = verify_identity_artifact(
+        Path(args.verl_identity_artifact),
+        verl_identity(Path(args.verl_root), Path(args.routing_overlay_root)),
+    )
     if not torch.cuda.is_available():
         raise RuntimeError("Lion LR calibration requires CUDA")
+    from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+
+    Lion, MuonWithAuxAdamW = load_optimizers()
     seed_all(args.seed)
     device = torch.device("cuda")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
@@ -449,9 +465,8 @@ def main() -> None:
         raise RuntimeError("old policy logprobs mutated during calibration")
     if tensor_digest([ref_logprobs]) != reference_logprobs_sha256:
         raise RuntimeError("reference policy logprobs mutated during calibration")
-    model_config = Path(args.model_path) / "config.json"
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "complete",
         "protocol": "per_dataset_same_frozen_batch_one_production_equivalent_ppo_update",
         "dataset": args.dataset,
@@ -495,7 +510,8 @@ def main() -> None:
         },
         "identities": {
             "train_file_sha256": sha256_file(args.train_file),
-            "model_config_sha256": sha256_file(model_config),
+            "model_snapshot_sha256": model_identity_sha256,
+            "verl_implementation_sha256": verl_identity_sha256,
             "rollout_sha256": rollout_sha256,
             "old_logprobs_sha256": old_logprobs_sha256,
             "reference_logprobs_sha256": reference_logprobs_sha256,

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -17,6 +18,19 @@ MAX_STEPS = 50
 VALIDATION_STEPS = (0, 25, 50)
 ROUTES = ("adamw_actor", "muon_actor", "lion_actor")
 BASELINE_ROUTE = "adamw_actor"
+PINNED_VERL_COMMIT = "7aed6b230776f963fa09509c10d9c3a767d1102c"
+VERL_CRITICAL_PATHS = (
+    "verl/trainer/main_ppo.py",
+    "verl/trainer/ppo/ray_trainer.py",
+    "verl/workers/fsdp_workers.py",
+    "verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+    "verl/workers/rollout/vllm_rollout/utils.py",
+    "verl/utils/attention_utils.py",
+)
+ROUTING_OVERLAY_PATHS = (
+    "verl/utils/optimizers.py",
+    "verl/workers/config/optimizer.py",
+)
 SOURCES = {
     "svamp": "cross_dataset/svamp",
     "arc_easy": "cross_dataset/arc_easy",
@@ -81,7 +95,7 @@ _ARC_LABEL = re.compile(r"[A-E]")
 
 def _terminal_answer_text(solution: str) -> str | None:
     if not isinstance(solution, str):
-        raise ContractError("solution must be a string")
+        raise AmbiguousAnswerError("solution must be a string")
     matches = list(_FINAL_LINE.finditer(solution))
     if not matches:
         return None
@@ -121,19 +135,26 @@ def parse_arc_easy_answer(solution: str) -> str | None:
 
 
 def score_answer(data_source: str, solution: str, ground_truth: str) -> float:
-    """Exact custom reward entrypoint; contract violations raise and stop PPO."""
+    """Exact reward; malformed model output scores zero, dataset errors are fatal."""
     if data_source == SOURCES["svamp"]:
-        predicted = parse_svamp_answer(solution)
-        if _NUMBER.fullmatch(ground_truth) is None:
+        if not isinstance(ground_truth, str) or _NUMBER.fullmatch(ground_truth) is None:
             raise ContractError(f"invalid SVAMP ground truth: {ground_truth!r}")
-        expected = Fraction(ground_truth)
+        try:
+            expected = Fraction(ground_truth)
+        except (ValueError, ZeroDivisionError) as error:
+            raise ContractError(f"invalid SVAMP ground truth: {ground_truth!r}") from error
+        parser = parse_svamp_answer
     elif data_source == SOURCES["arc_easy"]:
-        predicted = parse_arc_easy_answer(solution)
-        if _ARC_LABEL.fullmatch(ground_truth) is None:
+        if not isinstance(ground_truth, str) or _ARC_LABEL.fullmatch(ground_truth) is None:
             raise ContractError(f"invalid ARC-Easy ground truth: {ground_truth!r}")
         expected = ground_truth
+        parser = parse_arc_easy_answer
     else:
         raise ContractError(f"unexpected data source: {data_source!r}")
+    try:
+        predicted = parser(solution)
+    except AmbiguousAnswerError:
+        return 0.0
     return float(predicted is not None and predicted == expected)
 
 
@@ -144,12 +165,44 @@ def compute_score(
     extra_info: Mapping[str, Any] | None = None,
 ) -> float:
     """VERL-compatible custom reward function."""
-    if extra_info is not None:
-        recorded_source = extra_info.get("data_source")
-        if recorded_source != data_source:
-            raise ContractError(
-                f"reward source mismatch: {recorded_source!r} != {data_source!r}"
-            )
+    if not isinstance(extra_info, Mapping):
+        raise ContractError("reward extra_info provenance must be a mapping")
+    dataset = {value: key for key, value in SOURCES.items()}.get(data_source)
+    if dataset is None:
+        raise ContractError(f"unexpected data source: {data_source!r}")
+    recorded_source = extra_info.get("data_source")
+    if recorded_source != data_source:
+        raise ContractError(
+            f"reward source mismatch: {recorded_source!r} != {data_source!r}"
+        )
+    expected_keys = {"data_source", "dataset", "split", "index", "id"}
+    if dataset == "arc_easy":
+        expected_keys |= {"choice_labels", "original_choice_labels"}
+    if set(extra_info) != expected_keys or extra_info.get("dataset") != dataset:
+        raise ContractError("reward extra_info provenance schema mismatch")
+    if extra_info.get("split") not in {"train", "validation"}:
+        raise ContractError("reward extra_info provenance split mismatch")
+    index = extra_info.get("index")
+    if type(index) is not int or index < 0:
+        raise ContractError("reward extra_info provenance index is invalid")
+    record_id = extra_info.get("id")
+    if not isinstance(record_id, str) or not record_id:
+        raise ContractError("reward extra_info provenance id is invalid")
+    if dataset == "arc_easy":
+        labels = extra_info.get("choice_labels")
+        original_labels = extra_info.get("original_choice_labels")
+        if (
+            not isinstance(labels, Sequence)
+            or isinstance(labels, (str, bytes))
+            or not 2 <= len(labels) <= 5
+            or list(labels) != list("ABCDE"[:len(labels)])
+            or not isinstance(original_labels, Sequence)
+            or isinstance(original_labels, (str, bytes))
+            or len(original_labels) != len(labels)
+            or any(not isinstance(label, str) or not label for label in original_labels)
+            or len(set(original_labels)) != len(original_labels)
+        ):
+            raise ContractError("reward extra_info choice provenance is invalid")
     return score_answer(data_source, solution_str, ground_truth)
 
 
@@ -262,6 +315,124 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _identity_hash(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _file_identity(root: Path, relative_path: str) -> dict[str, Any]:
+    path = root / relative_path
+    if not path.is_file():
+        raise ContractError(f"missing identity file: {path}")
+    return {
+        "path": relative_path,
+        "size": path.stat().st_size,
+        "sha256": file_sha256(path),
+    }
+
+
+def model_identity(model_root: Path) -> dict[str, Any]:
+    """Hash every file in the resolved local model snapshot deterministically."""
+    if not model_root.is_dir():
+        raise ContractError(f"missing model snapshot: {model_root}")
+    relative_paths = sorted(
+        path.relative_to(model_root).as_posix()
+        for path in model_root.rglob("*")
+        if path.is_file()
+    )
+    names = {Path(path).name for path in relative_paths}
+    if "config.json" not in names:
+        raise ContractError("model snapshot is missing config.json")
+    if not any(name == "tokenizer.json" or name.startswith("tokenizer") for name in names):
+        raise ContractError("model snapshot is missing tokenizer metadata")
+    if not any(
+        name.endswith(".safetensors") or (name.startswith("pytorch_model") and name.endswith(".bin"))
+        for name in names
+    ):
+        raise ContractError("model snapshot is missing model weights")
+    for index_path in (model_root / path for path in relative_paths if path.endswith(".index.json")):
+        try:
+            index = json.loads(index_path.read_text())
+            weight_map = index["weight_map"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ContractError(f"invalid model weight index: {index_path}") from error
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise ContractError(f"invalid model weight index: {index_path}")
+        for shard in set(weight_map.values()):
+            if not isinstance(shard, str) or not (index_path.parent / shard).is_file():
+                raise ContractError(f"missing indexed model weight shard: {shard!r}")
+    core = {
+        "schema_version": 1,
+        "kind": "local-model-snapshot",
+        "files": [_file_identity(model_root, path) for path in relative_paths],
+    }
+    return {**core, "identity_sha256": _identity_hash(core)}
+
+
+def verl_identity(verl_root: Path, overlay_root: Path) -> dict[str, Any]:
+    """Hash the pinned VERL checkout and active critical/overlay implementation."""
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(verl_root), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        tree = subprocess.run(
+            ["git", "-C", str(verl_root), "rev-parse", "HEAD^{tree}"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        tracked_output = subprocess.run(
+            ["git", "-C", str(verl_root), "ls-files", "-z"],
+            check=True, capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ContractError(f"cannot identify VERL checkout: {verl_root}") from error
+    if commit != PINNED_VERL_COMMIT:
+        raise ContractError(f"VERL commit mismatch: {commit!r}")
+    tracked_paths = sorted(
+        path.decode("utf-8") for path in tracked_output.split(b"\0") if path
+    )
+    if not tracked_paths:
+        raise ContractError("VERL checkout has no tracked files")
+    tracked_worktree_sha256 = _identity_hash(
+        {"files": [_file_identity(verl_root, path) for path in tracked_paths]}
+    )
+    files = []
+    for relative_path in (*VERL_CRITICAL_PATHS, *ROUTING_OVERLAY_PATHS):
+        active = _file_identity(verl_root, relative_path)
+        if relative_path in ROUTING_OVERLAY_PATHS:
+            overlay = _file_identity(overlay_root, relative_path)
+            if active["sha256"] != overlay["sha256"] or active["size"] != overlay["size"]:
+                raise ContractError(f"routing overlay is not active: {relative_path}")
+            active["overlay_sha256"] = overlay["sha256"]
+        files.append(active)
+    core = {
+        "schema_version": 1,
+        "kind": "verl-implementation",
+        "git_commit": commit,
+        "git_tree": tree,
+        "tracked_worktree_sha256": tracked_worktree_sha256,
+        "files": files,
+    }
+    return {**core, "identity_sha256": _identity_hash(core)}
+
+
+def write_identity_artifact(path: Path, identity: Mapping[str, Any]) -> None:
+    path.write_text(json.dumps(identity, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+def verify_identity_artifact(path: Path, observed: Mapping[str, Any]) -> str:
+    try:
+        recorded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractError(f"invalid identity artifact: {path}") from error
+    if recorded != observed:
+        raise ContractError(f"identity artifact mismatch: {path}")
+    identity_sha256 = observed.get("identity_sha256")
+    if not isinstance(identity_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", identity_sha256) is None:
+        raise ContractError(f"invalid identity hash: {path}")
+    return identity_sha256
 
 
 def read_metric_rows(path: Path) -> list[dict[str, Any]]:

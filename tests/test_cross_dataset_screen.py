@@ -1,10 +1,12 @@
 import hashlib
 import json
 import math
+import subprocess
 from pathlib import Path
 
 import pytest
 
+import cross_dataset_screen
 from collect_cross_dataset_screen import build_result, validate_manifest
 from cross_dataset_screen import (
     DATASETS,
@@ -15,15 +17,35 @@ from cross_dataset_screen import (
     adapt_records,
     adapt_svamp,
     compute_score,
+    model_identity,
     parse_arc_easy_answer,
     parse_svamp_answer,
     validate_gate_metrics,
     validate_held_out,
     validate_screen_metrics,
+    verl_identity,
+    verify_identity_artifact,
+    write_identity_artifact,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _reward_extra(source):
+    dataset = source.removeprefix("cross_dataset/")
+    extra = {
+        "data_source": source,
+        "dataset": dataset,
+        "split": "validation",
+        "index": 0,
+        "id": "fixture-0",
+    }
+    if dataset == "arc_easy":
+        extra.update(
+            {"choice_labels": ["A", "B"], "original_choice_labels": ["1", "2"]}
+        )
+    return extra
 
 
 def test_svamp_adapter_is_deterministic_and_uses_held_out_source_schema():
@@ -120,7 +142,7 @@ def test_arc_parser_and_rewards_are_exact_and_source_bound():
             "cross_dataset/arc_easy",
             "reason\nFinal answer: B",
             "B",
-            {"data_source": "cross_dataset/arc_easy"},
+            _reward_extra("cross_dataset/arc_easy"),
         )
         == 1.0
     )
@@ -129,7 +151,7 @@ def test_arc_parser_and_rewards_are_exact_and_source_bound():
             "cross_dataset/svamp",
             "reason\nFinal answer: 2.00",
             "2",
-            {"data_source": "cross_dataset/svamp"},
+            _reward_extra("cross_dataset/svamp"),
         )
         == 1.0
     )
@@ -140,8 +162,48 @@ def test_arc_parser_and_rewards_are_exact_and_source_bound():
             "cross_dataset/arc_easy",
             "Final answer: A",
             "A",
-            {"data_source": "cross_dataset/svamp"},
+            _reward_extra("cross_dataset/svamp"),
         )
+
+
+@pytest.mark.parametrize(
+    ("source", "completion", "ground_truth"),
+    [
+        ("cross_dataset/svamp", "Final answer: 1\nFinal answer: 1", "1"),
+        ("cross_dataset/svamp", "final answer: 1", "1"),
+        ("cross_dataset/svamp", "Final answer: 1.", "1"),
+        ("cross_dataset/svamp", "Final answer: 1e3", "1000"),
+        ("cross_dataset/svamp", "missing", "1"),
+        ("cross_dataset/arc_easy", "Final answer: b", "B"),
+        ("cross_dataset/arc_easy", "Final answer: B.", "B"),
+        ("cross_dataset/arc_easy", "", "B"),
+    ],
+)
+def test_malformed_model_completions_deterministically_score_zero(
+    source, completion, ground_truth
+):
+    extra_info = _reward_extra(source)
+    assert compute_score(source, completion, ground_truth, extra_info) == 0.0
+    assert compute_score(source, completion, ground_truth, extra_info) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("source", "ground_truth", "extra_info", "message"),
+    [
+        ("cross_dataset/svamp", "1/0", _reward_extra("cross_dataset/svamp"), "ground truth"),
+        ("cross_dataset/arc_easy", "b", _reward_extra("cross_dataset/arc_easy"), "ground truth"),
+        ("unknown", "1", {"data_source": "unknown"}, "data source"),
+        ("cross_dataset/svamp", "1", None, "extra_info"),
+        ("cross_dataset/svamp", "1", {}, "source mismatch"),
+        ("cross_dataset/svamp", "1", {"data_source": "wrong"}, "source mismatch"),
+        ("cross_dataset/svamp", "1", {"data_source": "cross_dataset/svamp"}, "schema"),
+    ],
+)
+def test_malformed_dataset_contract_and_provenance_remain_fatal(
+    source, ground_truth, extra_info, message
+):
+    with pytest.raises(ContractError, match=message):
+        compute_score(source, "Final answer: 1", ground_truth, extra_info)
 
 
 def _write_metrics(
@@ -250,7 +312,8 @@ def test_screen_metrics_reject_validation_outside_preregistered_schedule(tmp_pat
 
 
 def _write_provenance(
-    root, phase, route, dataset, commit, manifest_sha, calibration_sha
+    root, phase, route, dataset, commit, manifest_sha, calibration_sha,
+    model_sha, verl_sha,
 ):
     optimizer = {
         "adamw_actor": "AdamW",
@@ -284,17 +347,21 @@ def _write_provenance(
         "actor_uses_adamw_auxiliaries": route == "muon_actor",
         "calibration_sha256": calibration_sha,
         "calibration_metric": "exact_full_categorical_KL_old_to_new_on_occupied_response_states",
+        "model_snapshot_sha256": model_sha,
+        "verl_implementation_sha256": verl_sha,
     }
     (root / "run-provenance.json").write_text(json.dumps(provenance))
 
 
-def _write_calibration(path, dataset, commit, manifest_sha, train_sha):
+def _write_calibration(
+    path, dataset, commit, manifest_sha, train_sha, model_sha, verl_sha
+):
     adam = {"mean": 0.01, "q95": 0.02, "occupied_states": 8}
     matched = {**adam, "mean_relative_error": 0.0, "q95_relative_error": 0.0}
     path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "status": "complete",
                 "protocol": "per_dataset_same_frozen_batch_one_production_equivalent_ppo_update",
                 "dataset": dataset,
@@ -313,6 +380,8 @@ def _write_calibration(path, dataset, commit, manifest_sha, train_sha):
                 "gates": {"passed": True},
                 "identities": {
                     "train_file_sha256": train_sha,
+                    "model_snapshot_sha256": model_sha,
+                    "verl_implementation_sha256": verl_sha,
                     "rollout_sha256": "1" * 64,
                     "old_logprobs_sha256": "2" * 64,
                     "reference_logprobs_sha256": "3" * 64,
@@ -324,6 +393,58 @@ def _write_calibration(path, dataset, commit, manifest_sha, train_sha):
         + "\n"
     )
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_implementation_identities(tmp_path, monkeypatch):
+    model_root = tmp_path / "model"
+    model_root.mkdir()
+    (model_root / "config.json").write_text('{"model_type":"qwen2"}\n')
+    (model_root / "tokenizer.json").write_text('{"version":"1"}\n')
+    (model_root / "tokenizer_config.json").write_text('{"padding_side":"left"}\n')
+    (model_root / "model-00001-of-00002.safetensors").write_bytes(b"weights-1")
+    (model_root / "model-00002-of-00002.safetensors").write_bytes(b"weights-2")
+    (model_root / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "layer.0": "model-00001-of-00002.safetensors",
+                    "layer.1": "model-00002-of-00002.safetensors",
+                }
+            }
+        )
+    )
+
+    verl_root = tmp_path / "verl-checkout"
+    overlay_root = tmp_path / "routing-overlay"
+    for relative in (
+        *cross_dataset_screen.VERL_CRITICAL_PATHS,
+        *cross_dataset_screen.ROUTING_OVERLAY_PATHS,
+    ):
+        payload = f"# {relative}\n".encode()
+        target = verl_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        if relative in cross_dataset_screen.ROUTING_OVERLAY_PATHS:
+            overlay = overlay_root / relative
+            overlay.parent.mkdir(parents=True, exist_ok=True)
+            overlay.write_bytes(payload)
+    subprocess.run(["git", "init", "-q", str(verl_root)], check=True)
+    subprocess.run(["git", "-C", str(verl_root), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(verl_root), "-c", "user.name=Test", "-c",
+         "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        check=True,
+    )
+    commit = subprocess.run(
+        ["git", "-C", str(verl_root), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    monkeypatch.setattr(cross_dataset_screen, "PINNED_VERL_COMMIT", commit)
+    model = model_identity(model_root)
+    verl = verl_identity(verl_root, overlay_root)
+    write_identity_artifact(tmp_path / "model-identity.json", model)
+    write_identity_artifact(tmp_path / "verl-identity.json", verl)
+    return model_root, verl_root, overlay_root, model["identity_sha256"], verl["identity_sha256"]
 
 
 def _write_manifest(tmp_path, dataset="svamp"):
@@ -407,42 +528,56 @@ def test_manifest_validation_rejects_missing_extra_tampered_and_wrong_rows(
         ("route", "lion_actor", "route"),
         ("source_commit", "other", "source_commit"),
         ("calibration_sha256", "0" * 64, "calibration_sha256"),
+        ("model_snapshot_sha256", "0" * 64, "model_snapshot_sha256"),
+        ("verl_implementation_sha256", "0" * 64, "verl_implementation_sha256"),
         ("actor_learning_rate", 2e-6, "calibrated actor learning rate"),
     ],
 )
 @pytest.mark.parametrize("dataset", ["svamp", "arc_easy"])
 def test_result_integration_binds_routes_seed_source_and_manifest(
-    tmp_path, dataset, field, value, message
+    tmp_path, monkeypatch, dataset, field, value, message
 ):
     source = DATASETS[dataset].source
     manifest_path = _write_manifest(tmp_path, dataset)
     manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     train_sha = hashlib.sha256((tmp_path / "train.parquet").read_bytes()).hexdigest()
+    model_root, verl_root, overlay_root, model_sha, verl_sha = (
+        _write_implementation_identities(tmp_path, monkeypatch)
+    )
     calibration_sha = _write_calibration(
-        tmp_path / "calibration.json", dataset, "commit", manifest_sha, train_sha
+        tmp_path / "calibration.json", dataset, "commit", manifest_sha, train_sha,
+        model_sha, verl_sha,
     )
     for route in ROUTES:
         gate = tmp_path / "gates" / route
         gate.mkdir(parents=True)
         _write_provenance(
-            gate, "gate", route, dataset, "commit", manifest_sha, calibration_sha
+            gate, "gate", route, dataset, "commit", manifest_sha, calibration_sha,
+            model_sha, verl_sha,
         )
         _write_metrics(gate / "metrics.jsonl", source, terminal=1)
     for route in ROUTES:
         root = tmp_path / route
         root.mkdir()
         _write_provenance(
-            root, "screen", route, dataset, "commit", manifest_sha, calibration_sha
+            root, "screen", route, dataset, "commit", manifest_sha, calibration_sha,
+            model_sha, verl_sha,
         )
         _write_metrics(root / "metrics.jsonl", source)
 
-    result = build_result(tmp_path, dataset, 0, "commit", manifest_path)
+    result = build_result(
+        tmp_path, dataset, 0, "commit", manifest_path,
+        model_root, verl_root, overlay_root,
+    )
     assert list(result["routes"]) == list(ROUTES)
     assert result["validation_steps"] == [0, 25, 50]
     assert result["critic_optimizer"] == "AdamW"
     assert result["routes"]["muon_actor"]["actor_optimizer"] == "MuonWithAuxAdamW"
     assert result["routes"]["lion_actor"]["calibration_sha256"] == calibration_sha
     assert set(result["gates"]) == set(ROUTES)
+    assert result["model_snapshot_sha256"] == model_sha
+    assert result["verl_implementation_sha256"] == verl_sha
+    assert result["gates"]["adamw_actor"]["model_snapshot_sha256"] == model_sha
     assert result["routes"]["muon_actor"]["actor_route_description"].endswith(
         "AdamW auxiliaries"
     )
@@ -453,7 +588,48 @@ def test_result_integration_binds_routes_seed_source_and_manifest(
     provenance[field] = value
     provenance_path.write_text(json.dumps(provenance))
     with pytest.raises(ContractError, match=message):
-        build_result(tmp_path, dataset, 0, "commit", manifest_path)
+        build_result(
+            tmp_path, dataset, 0, "commit", manifest_path,
+            model_root, verl_root, overlay_root,
+        )
+
+
+def test_identity_artifacts_recompute_bytes_and_reject_arbitrary_strings(
+    tmp_path, monkeypatch
+):
+    model_root, verl_root, overlay_root, model_sha, verl_sha = (
+        _write_implementation_identities(tmp_path, monkeypatch)
+    )
+    assert verify_identity_artifact(
+        tmp_path / "model-identity.json", model_identity(model_root)
+    ) == model_sha
+    assert verify_identity_artifact(
+        tmp_path / "verl-identity.json", verl_identity(verl_root, overlay_root)
+    ) == verl_sha
+
+    shard = model_root / "model-00002-of-00002.safetensors"
+    shard.unlink()
+    with pytest.raises(ContractError, match="missing indexed model weight shard"):
+        model_identity(model_root)
+    shard.write_bytes(b"weights-2")
+
+    (model_root / "model-00002-of-00002.safetensors").write_bytes(b"tampered")
+    with pytest.raises(ContractError, match="identity artifact mismatch"):
+        verify_identity_artifact(
+            tmp_path / "model-identity.json", model_identity(model_root)
+        )
+
+    artifact = json.loads((tmp_path / "verl-identity.json").read_text())
+    artifact["identity_sha256"] = "0" * 64
+    (tmp_path / "verl-identity.json").write_text(json.dumps(artifact))
+    with pytest.raises(ContractError, match="identity artifact mismatch"):
+        verify_identity_artifact(
+            tmp_path / "verl-identity.json", verl_identity(verl_root, overlay_root)
+        )
+
+    critical = verl_root / cross_dataset_screen.VERL_CRITICAL_PATHS[0]
+    critical.write_text("# modified active trainer\n")
+    assert verl_identity(verl_root, overlay_root)["identity_sha256"] != verl_sha
 
 
 def test_runner_and_launcher_wire_preregistered_protocol():
@@ -463,11 +639,17 @@ def test_runner_and_launcher_wire_preregistered_protocol():
         / "routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_cross_dataset_screen.sh"
     ).read_text()
 
-    loop = runner[runner.index("for route in adamw_actor muon_actor lion_actor") :]
-    assert loop.index('run_route gate "$route"') < loop.index('--gate-route "$route"')
-    assert loop.index('--gate-route "$route"') < loop.index('run_route screen "$route"')
-    assert 'run_route gate "$route" "$run_root/gates/$route" || finish $?' in loop
-    assert '--gate-route "$route" || finish $?' in loop
+    first_loop = runner.index("for route in adamw_actor muon_actor lion_actor")
+    second_loop = runner.index("for route in adamw_actor muon_actor lion_actor", first_loop + 1)
+    gate_loop = runner[first_loop:second_loop]
+    screen_loop = runner[second_loop:]
+    assert 'run_route gate "$route"' in gate_loop
+    assert '--gate-route "$route"' in gate_loop
+    assert 'run_route gate "$route" "$run_root/gates/$route" || finish $?' in gate_loop
+    assert '--gate-route "$route" || finish $?' in gate_loop
+    assert "run_route screen" not in gate_loop
+    assert 'run_route screen "$route"' in screen_loop
+    assert "run_route gate" not in screen_loop
     assert "calibrate_lion_actor_lr.py" in runner
     assert '--train-file "$data_root/train.parquet"' in runner
     assert 'chmod 0444 "$calibration"' in runner
@@ -486,3 +668,6 @@ def test_runner_and_launcher_wire_preregistered_protocol():
     assert "hidden_attention_mlp_matrices_muon;all_auxiliaries_adamw" in launcher
     assert "all_actor_parameters_lion_no_adam" in launcher
     assert "CALIBRATION_SHA256" in launcher
+    assert "verify_identity_artifact" in launcher
+    assert "model_identity(model_root)" in launcher
+    assert "verl_identity(verl_root, overlay_root)" in launcher

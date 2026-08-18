@@ -129,6 +129,25 @@ rmdir "$preflight_root"
 status_file="$run_root/status.json"
 write_status running "preflight complete"
 
+# Materialize and immediately verify byte-derived identities before any model load.
+identity_values=$("$venv_python" - "$model_root" "$verl_root" \
+  "$repo_root/routed-scale-source" "$run_root" <<'PY'
+import sys
+from pathlib import Path
+from cross_dataset_screen import model_identity, verl_identity, write_identity_artifact
+model_root, verl_root, overlay_root, run_root = map(Path, sys.argv[1:])
+model = model_identity(model_root)
+verl = verl_identity(verl_root, overlay_root)
+write_identity_artifact(run_root / "model-identity.json", model)
+write_identity_artifact(run_root / "verl-identity.json", verl)
+print(model["identity_sha256"], verl["identity_sha256"])
+PY
+) || finish $?
+read -r model_identity_sha256 verl_identity_sha256 extra <<<"$identity_values"
+[[ -z "${extra:-}" && "$model_identity_sha256" =~ ^[0-9a-f]{64}$ && \
+  "$verl_identity_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid implementation identities"; finish 65; }
+chmod 0444 "$run_root/model-identity.json" "$run_root/verl-identity.json" || finish $?
+
 # Calibrate both non-Adam routes on this dataset's same frozen rollout batch.
 # The artifact is immutable once hashed and every gate/screen provenance binds it.
 calibration="$run_root/calibration.json"
@@ -140,17 +159,22 @@ calibration="$run_root/calibration.json"
   --data-source "$data_source" \
   --source-commit "$source_commit" \
   --manifest-sha256 "$manifest_sha256" \
+  --model-identity-artifact "$run_root/model-identity.json" \
+  --verl-identity-artifact "$run_root/verl-identity.json" \
+  --verl-root "$verl_root" \
+  --routing-overlay-root "$repo_root/routed-scale-source" \
   --seed 0 \
   --max-response-length 256 || finish $?
 calibration_values=$("$venv_python" - "$calibration" "$dataset" "$data_source" \
-  "$source_commit" "$manifest_sha256" "$data_root/train.parquet" <<'PY'
+  "$source_commit" "$manifest_sha256" "$data_root/train.parquet" \
+  "$model_identity_sha256" "$verl_identity_sha256" <<'PY'
 import hashlib, json, math, sys
 from pathlib import Path
-path, dataset, source, commit, manifest_hash, train_path = sys.argv[1:]
+path, dataset, source, commit, manifest_hash, train_path, model_hash, verl_hash = sys.argv[1:]
 payload = Path(path).read_bytes()
 artifact = json.loads(payload)
 expected = {
-    "schema_version": 2,
+    "schema_version": 3,
     "status": "complete",
     "protocol": "per_dataset_same_frozen_batch_one_production_equivalent_ppo_update",
     "dataset": dataset,
@@ -167,6 +191,10 @@ for key, value in expected.items():
 train_hash = hashlib.sha256(Path(train_path).read_bytes()).hexdigest()
 if artifact.get("identities", {}).get("train_file_sha256") != train_hash:
     raise RuntimeError("calibration train-file hash mismatch")
+if artifact.get("identities", {}).get("model_snapshot_sha256") != model_hash:
+    raise RuntimeError("calibration model snapshot identity mismatch")
+if artifact.get("identities", {}).get("verl_implementation_sha256") != verl_hash:
+    raise RuntimeError("calibration VERL implementation identity mismatch")
 for route in ("muon", "lion"):
     lr = artifact.get(f"chosen_{route}_learning_rate")
     metrics = artifact.get(f"chosen_{route}_actual_full_categorical_kl", {})
@@ -191,17 +219,26 @@ run_route() {
     REWARD_PATH="$reward_path" SOURCE_COMMIT="$source_commit" \
     DATA_MANIFEST_SHA256="$manifest_sha256" MUON_ACTOR_LR="$muon_lr" \
     LION_ACTOR_LR="$lion_lr" CALIBRATION_SHA256="$calibration_sha256" \
+    MODEL_IDENTITY_SHA256="$model_identity_sha256" \
+    VERL_IDENTITY_SHA256="$verl_identity_sha256" \
+    MODEL_IDENTITY_ARTIFACT="$run_root/model-identity.json" \
+    VERL_IDENTITY_ARTIFACT="$run_root/verl-identity.json" \
+    VERL_ROOT="$verl_root" ROUTING_OVERLAY_ROOT="$repo_root/routed-scale-source" \
     bash "$launcher"
 }
 
 # Each route must independently produce real baseline validation and a finite
-# step-1 PPO safety update. Validation is fail-closed before that route's 50 steps.
+# step-1 PPO safety update. All three gates pass before any 50-step launch.
 for route in adamw_actor muon_actor lion_actor; do
   run_route gate "$route" "$run_root/gates/$route" || finish $?
   "$venv_python" "$repo_root/collect_cross_dataset_screen.py" \
-    "$run_root" "$dataset" 0 "$source_commit" "$manifest" --gate-route "$route" || finish $?
+    "$run_root" "$dataset" 0 "$source_commit" "$manifest" "$model_root" \
+    "$verl_root" "$repo_root/routed-scale-source" --gate-route "$route" || finish $?
+done
+for route in adamw_actor muon_actor lion_actor; do
   run_route screen "$route" "$run_root/$route" || finish $?
 done
 "$venv_python" "$repo_root/collect_cross_dataset_screen.py" \
-  "$run_root" "$dataset" 0 "$source_commit" "$manifest" || finish $?
+  "$run_root" "$dataset" 0 "$source_commit" "$manifest" "$model_root" \
+  "$verl_root" "$repo_root/routed-scale-source" || finish $?
 finish 0

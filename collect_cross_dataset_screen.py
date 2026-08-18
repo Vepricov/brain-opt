@@ -16,6 +16,9 @@ from cross_dataset_screen import (
     SEED,
     ContractError,
     file_sha256,
+    model_identity,
+    verl_identity,
+    verify_identity_artifact,
     validate_gate_metrics,
     validate_screen_metrics,
 )
@@ -103,6 +106,8 @@ def _check_provenance(
     source_commit: str,
     manifest_sha256: str,
     calibration_sha256: str,
+    model_identity_sha256: str,
+    verl_identity_sha256: str,
     expected_actor_learning_rate: float,
 ) -> dict:
     provenance = json.loads(_one(root, "run-provenance.json").read_text())
@@ -132,6 +137,8 @@ def _check_provenance(
         "actor_uses_adamw_auxiliaries": route == "muon_actor",
         "calibration_sha256": calibration_sha256,
         "calibration_metric": CALIBRATION_METRIC,
+        "model_snapshot_sha256": model_identity_sha256,
+        "verl_implementation_sha256": verl_identity_sha256,
     }
     for key, value in expected.items():
         if provenance.get(key) != value:
@@ -166,11 +173,13 @@ def validate_calibration(
     source_commit: str,
     manifest_sha256: str,
     train_sha256: str,
+    model_identity_sha256: str,
+    verl_identity_sha256: str,
 ) -> tuple[dict, str]:
     calibration_sha256 = file_sha256(path)
     calibration = json.loads(path.read_text())
     expected = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "complete",
         "protocol": "per_dataset_same_frozen_batch_one_production_equivalent_ppo_update",
         "dataset": dataset,
@@ -190,6 +199,10 @@ def validate_calibration(
     identities = calibration.get("identities", {})
     if identities.get("train_file_sha256") != train_sha256:
         raise ContractError("calibration train-file hash mismatch")
+    if identities.get("model_snapshot_sha256") != model_identity_sha256:
+        raise ContractError("calibration model snapshot identity mismatch")
+    if identities.get("verl_implementation_sha256") != verl_identity_sha256:
+        raise ContractError("calibration VERL implementation identity mismatch")
     for key in ("rollout_sha256", "old_logprobs_sha256", "reference_logprobs_sha256"):
         value = identities.get(key)
         if (
@@ -250,6 +263,8 @@ def validate_gate(
     source_commit: str,
     manifest_sha256: str,
     calibration_sha256: str,
+    model_identity_sha256: str,
+    verl_identity_sha256: str,
     route: str,
     expected_actor_learning_rate: float,
 ) -> dict:
@@ -261,11 +276,16 @@ def validate_gate(
         source_commit=source_commit,
         manifest_sha256=manifest_sha256,
         calibration_sha256=calibration_sha256,
+        model_identity_sha256=model_identity_sha256,
+        verl_identity_sha256=verl_identity_sha256,
         expected_actor_learning_rate=expected_actor_learning_rate,
     )
-    return validate_gate_metrics(
+    result = validate_gate_metrics(
         _one(gate_root, "metrics.jsonl"), DATASETS[dataset].source
     )
+    result["model_snapshot_sha256"] = model_identity_sha256
+    result["verl_implementation_sha256"] = verl_identity_sha256
+    return result
 
 
 def build_result(
@@ -274,12 +294,21 @@ def build_result(
     seed: int,
     source_commit: str,
     manifest_path: Path,
+    model_root: Path,
+    verl_root: Path,
+    routing_overlay_root: Path,
 ) -> dict:
     if seed != SEED:
         raise ContractError(f"screen is preregistered for seed {SEED}, got {seed}")
     if dataset not in DATASETS:
         raise ContractError(f"unsupported dataset: {dataset!r}")
     manifest, manifest_sha256 = validate_manifest(manifest_path, dataset)
+    model_identity_sha256 = verify_identity_artifact(
+        run_root / "model-identity.json", model_identity(model_root)
+    )
+    verl_identity_sha256 = verify_identity_artifact(
+        run_root / "verl-identity.json", verl_identity(verl_root, routing_overlay_root)
+    )
     spec = DATASETS[dataset]
     train_path = manifest_path.parent / "train.parquet"
     if not train_path.is_file() or file_sha256(train_path) != manifest.get(
@@ -292,6 +321,8 @@ def build_result(
         source_commit,
         manifest_sha256,
         file_sha256(train_path),
+        model_identity_sha256,
+        verl_identity_sha256,
     )
     gates = {
         route: validate_gate(
@@ -300,6 +331,8 @@ def build_result(
             source_commit,
             manifest_sha256,
             calibration_sha256,
+            model_identity_sha256,
+            verl_identity_sha256,
             route,
             1e-6
             if route == "adamw_actor"
@@ -318,6 +351,8 @@ def build_result(
             source_commit=source_commit,
             manifest_sha256=manifest_sha256,
             calibration_sha256=calibration_sha256,
+            model_identity_sha256=model_identity_sha256,
+            verl_identity_sha256=verl_identity_sha256,
             expected_actor_learning_rate=(
                 1e-6
                 if route == "adamw_actor"
@@ -330,6 +365,8 @@ def build_result(
         route_result["actor_optimizer"] = provenance["actor_optimizer"]
         route_result["actor_learning_rate"] = provenance["actor_learning_rate"]
         route_result["calibration_sha256"] = provenance["calibration_sha256"]
+        route_result["model_snapshot_sha256"] = provenance["model_snapshot_sha256"]
+        route_result["verl_implementation_sha256"] = provenance["verl_implementation_sha256"]
         route_result["actor_route_description"] = provenance["actor_route_description"]
         route_results[route] = route_result
     return {
@@ -345,6 +382,8 @@ def build_result(
         "critic_optimizer": "AdamW",
         "calibration_sha256": calibration_sha256,
         "calibration_metric": calibration["calibration_metric"],
+        "model_snapshot_sha256": model_identity_sha256,
+        "verl_implementation_sha256": verl_identity_sha256,
         "gates": gates,
         "routes": route_results,
     }
@@ -357,11 +396,21 @@ def main() -> int:
     parser.add_argument("seed", type=int)
     parser.add_argument("source_commit")
     parser.add_argument("manifest", type=Path)
+    parser.add_argument("model_root", type=Path)
+    parser.add_argument("verl_root", type=Path)
+    parser.add_argument("routing_overlay_root", type=Path)
     parser.add_argument("--gate-route", choices=ROUTES)
     args = parser.parse_args()
     if args.seed != SEED:
         raise ContractError(f"screen is preregistered for seed {SEED}")
     _, manifest_sha256 = validate_manifest(args.manifest, args.dataset)
+    model_identity_sha256 = verify_identity_artifact(
+        args.run_root / "model-identity.json", model_identity(args.model_root)
+    )
+    verl_identity_sha256 = verify_identity_artifact(
+        args.run_root / "verl-identity.json",
+        verl_identity(args.verl_root, args.routing_overlay_root),
+    )
     if args.gate_route:
         manifest = json.loads(args.manifest.read_text())
         train_path = args.manifest.parent / "train.parquet"
@@ -375,6 +424,8 @@ def main() -> int:
             args.source_commit,
             manifest_sha256,
             file_sha256(train_path),
+            model_identity_sha256,
+            verl_identity_sha256,
         )
         result = validate_gate(
             args.run_root / "gates" / args.gate_route,
@@ -382,6 +433,8 @@ def main() -> int:
             args.source_commit,
             manifest_sha256,
             calibration_sha256,
+            model_identity_sha256,
+            verl_identity_sha256,
             args.gate_route,
             (
                 1e-6
@@ -397,7 +450,8 @@ def main() -> int:
         )
         return 0
     result = build_result(
-        args.run_root, args.dataset, args.seed, args.source_commit, args.manifest
+        args.run_root, args.dataset, args.seed, args.source_commit, args.manifest,
+        args.model_root, args.verl_root, args.routing_overlay_root,
     )
     encoded = json.dumps(result, sort_keys=True, separators=(",", ":"))
     (args.run_root / "result.json").write_text(encoded + "\n")

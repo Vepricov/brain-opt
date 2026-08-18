@@ -91,6 +91,11 @@ def test_calibration_names_actual_metric_and_keeps_kl_reduction_on_device():
     assert '"model_compute_device": "cuda"' in source
     assert "old policy logprobs mutated during calibration" in source
     assert "reference policy logprobs mutated during calibration" in source
+    assert source.index("verify_identity_artifact(") < source.index(
+        "AutoTokenizer.from_pretrained"
+    )
+    assert '"model_snapshot_sha256": model_identity_sha256' in source
+    assert '"verl_implementation_sha256": verl_identity_sha256' in source
 
 
 def test_both_non_adam_routes_share_frozen_gradients_and_joint_matching():
