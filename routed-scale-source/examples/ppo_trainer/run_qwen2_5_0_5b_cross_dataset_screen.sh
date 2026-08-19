@@ -6,7 +6,7 @@ PHASE=${PHASE:?Set PHASE to gate or screen}
 ROUTE=${ROUTE:?Set ROUTE to the preregistered actor route}
 DATASET=${DATASET:?Set DATASET to svamp or arc_easy}
 DATA_SOURCE=${DATA_SOURCE:?Set the exact prepared data source}
-SEED=${SEED:?Set SEED=0}
+SEED=${SEED:?Set SEED=0, 1, or 2}
 MODEL_PATH=${MODEL_PATH:?Set MODEL_PATH to the pinned local model snapshot}
 DATA_ROOT=${DATA_ROOT:?Set DATA_ROOT to the prepared dataset directory}
 OUTPUT_ROOT=${OUTPUT_ROOT:?Set OUTPUT_ROOT to a fresh route directory}
@@ -28,7 +28,7 @@ CALIBRATION_METRIC=exact_full_categorical_KL_old_to_new_on_occupied_response_sta
 [[ "$MODEL_IDENTITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid model identity hash" >&2; exit 64; }
 [[ "$VERL_IDENTITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid VERL identity hash" >&2; exit 64; }
 
-[[ "$SEED" == 0 ]] || { echo "cross-dataset screen requires seed 0" >&2; exit 64; }
+[[ "$SEED" =~ ^[012]$ ]] || { echo "cross-dataset screen requires seed 0, 1, or 2" >&2; exit 64; }
 case "$PHASE" in gate|screen) ;; *) echo "unsupported PHASE=$PHASE" >&2; exit 64 ;; esac
 case "$DATASET:$DATA_SOURCE" in
   svamp:cross_dataset/svamp|arc_easy:cross_dataset/arc_easy) ;;
@@ -69,7 +69,7 @@ if [[ "$ROUTE" == adamw_actor ]]; then
 fi
 
 TOTAL_STEPS=$([[ "$PHASE" == gate ]] && echo 1 || echo "${SCREEN_TOTAL_STEPS:-50}")
-RUN_NAME="qwen2.5-0.5b_${DATASET}_ppo_${PHASE}_${ROUTE}_seed0"
+RUN_NAME="qwen2.5-0.5b_${DATASET}_ppo_${PHASE}_${ROUTE}_seed${SEED}"
 RUN_DIR="$OUTPUT_ROOT/$RUN_NAME"
 mkdir -p "$RUN_DIR"
 export VERL_FILE_LOGGER_PATH="$RUN_DIR/metrics.jsonl"
@@ -139,7 +139,7 @@ python3 -m verl.trainer.main_ppo \
   data.max_response_length=256 \
   data.filter_overlong_prompts=True \
   data.truncation=error \
-  data.seed=0 \
+  data.seed="$SEED" \
   actor_rollout_ref.model.path="$MODEL_PATH" \
   actor_rollout_ref.model.use_remove_padding=False \
   +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
@@ -151,9 +151,9 @@ python3 -m verl.trainer.main_ppo \
   actor_rollout_ref.actor.optim.override_optimizer_config="$ACTOR_OPT_OVERRIDE" \
   actor_rollout_ref.actor.ppo_mini_batch_size=64 \
   actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
-  actor_rollout_ref.actor.data_loader_seed=0 \
+  actor_rollout_ref.actor.data_loader_seed="$SEED" \
   actor_rollout_ref.actor.fsdp_config.use_orig_params=True \
-  actor_rollout_ref.actor.fsdp_config.seed=0 \
+  actor_rollout_ref.actor.fsdp_config.seed="$SEED" \
   actor_rollout_ref.rollout.name=vllm \
   actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
   actor_rollout_ref.rollout.gpu_memory_utilization="$GPU_MEMORY_UTILIZATION" \
@@ -171,9 +171,9 @@ python3 -m verl.trainer.main_ppo \
   critic.optim.override_optimizer_config=null \
   critic.ppo_mini_batch_size=64 \
   critic.ppo_micro_batch_size_per_gpu=4 \
-  critic.data_loader_seed=0 \
+  critic.data_loader_seed="$SEED" \
   critic.fsdp.use_orig_params=True \
-  critic.fsdp.seed=0 \
+  critic.fsdp.seed="$SEED" \
   trainer.logger='[console,file]' \
   trainer.project_name=rl_muon_cross_dataset_screen \
   trainer.experiment_name="$RUN_NAME" \
