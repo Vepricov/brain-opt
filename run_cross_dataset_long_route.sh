@@ -25,8 +25,8 @@ data_root="$campaign_root/data/cross-dataset/$dataset"
 manifest="$data_root/manifest.json"
 launcher="$repo_root/routed-scale-source/examples/ppo_trainer/run_qwen2_5_0_5b_cross_dataset_screen.sh"
 reward_path="$repo_root/cross_dataset_screen.py"
-run_root="$campaign_root/cross_dataset_long_${dataset}_${route}_seed0_${total_steps}_${source_commit:0:7}${run_attempt:+_$run_attempt}"
-mkdir "$run_root"
+run_root="$campaign_root/cross_dataset_long_${dataset}_${route}_seed0_${total_steps}_${source_commit:0:7}"
+mkdir -p "$run_root"
 status="$run_root/status.json"
 finish() {
   local rc=$1 state=complete
@@ -105,6 +105,7 @@ run_route() {
   local output_root="$run_root/$phase/$route"
   mkdir -p "$output_root"
   PHASE="$phase" ROUTE="$route" DATASET="$dataset" DATA_SOURCE="$data_source" SEED=0 SCREEN_TOTAL_STEPS="$total_steps" \
+  CHECKPOINT_FREQ=25 RESUME_MODE=auto \
     MODEL_PATH="$model_root" DATA_ROOT="$data_root" OUTPUT_ROOT="$output_root" \
     REWARD_PATH="$reward_path" SOURCE_COMMIT="$source_commit" DATA_MANIFEST_SHA256="$manifest_sha256" \
     MUON_ACTOR_LR=1e-6 LION_ACTOR_LR=1e-6 CALIBRATION_SHA256="$calibration_sha256" \

@@ -182,6 +182,7 @@ python3 -m verl.trainer.main_ppo \
   trainer.nnodes=1 \
   trainer.val_before_train=True \
   trainer.test_freq=25 \
-  trainer.save_freq=-1 \
+  trainer.save_freq="${CHECKPOINT_FREQ:--1}" \
+  trainer.resume_mode="${RESUME_MODE:-auto}" \
   trainer.total_training_steps="$TOTAL_STEPS" \
   "$@" 2>&1 | tee "$RUN_DIR/train.log"
