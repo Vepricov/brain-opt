@@ -366,6 +366,7 @@ class KLMatchedSOAP(Optimizer):
         fisher_expected_states: int = 57,
         fisher_factor_rank: int = 16,
         fisher_dense_threshold: int = 256,
+        fisher_refresh_frequency: int = 4,
     ) -> None:
         named_parameters = list(named_parameters)
         soap_named, auxiliary_named = partition_actor_parameters(named_parameters)
@@ -378,7 +379,8 @@ class KLMatchedSOAP(Optimizer):
         if len(tuple(fisher_prompt_indices)) != 16 or len(set(fisher_prompt_indices)) != 16:
             raise ValueError("exactly 16 distinct Fisher prompt indices are required")
         if min(soap_precondition_frequency, soap_max_precond_dim, fisher_micro_batch_size,
-               fisher_expected_states, fisher_factor_rank, fisher_dense_threshold) < 1:
+               fisher_expected_states, fisher_factor_rank, fisher_dense_threshold,
+               fisher_refresh_frequency) < 1:
             raise ValueError("SOAP and Fisher dimensions/counts must be positive")
         if fisher_probe_count < 2 or fisher_probe_count % 2:
             raise ValueError("Fisher probes must contain deterministic antithetic pairs")
@@ -427,6 +429,7 @@ class KLMatchedSOAP(Optimizer):
         self.fisher_expected_states = int(fisher_expected_states)
         self.fisher_factor_rank = int(fisher_factor_rank)
         self.fisher_dense_threshold = int(fisher_dense_threshold)
+        self.fisher_refresh_frequency = int(fisher_refresh_frequency)
         self._fisher_evaluator: Callable[[Mapping[Tensor, Tensor]], float] | None = None
         self._prompt_identity: Mapping[str, Any] | None = None
         self._probe_identity: Mapping[str, Any] | None = None
@@ -569,14 +572,17 @@ class KLMatchedSOAP(Optimizer):
                     live_state = self.state.get(parameter, {})
                     adam_direction, candidate = self._adamw_proposal(parameter, gradient, live_state, self.adamw_eps)
                     soap_direction, candidate = self._soap_proposal(parameter, gradient, candidate)
-                    adamw[parameter] = adam_direction.detach()
-                    soap[parameter] = soap_direction.detach()
+                    # Both Fisher quadratics are evaluated by the CPU K-FAC
+                    # scorer, so retaining an actor-sized pair of proposal
+                    # tensors on GPU only inflates the first-update peak.
+                    adamw[parameter] = adam_direction.detach().to(device="cpu")
+                    soap[parameter] = soap_direction.detach().to(device="cpu")
                     next_states[parameter] = candidate
                 else:
                     direction, candidate = self._adamw_proposal(
                         parameter, gradient, self.state.get(parameter, {}), self.auxiliary_eps
                     )
-                    auxiliary[parameter] = direction.detach()
+                    auxiliary[parameter] = direction.detach().to(device="cpu")
                     next_states[parameter] = candidate
         if not adamw or set(adamw) != set(soap):
             raise RuntimeError("SOAP-owned actor matrices must have both AdamW and SOAP proposals")
@@ -589,9 +595,9 @@ class KLMatchedSOAP(Optimizer):
         if not math.isfinite(alpha) or alpha <= 0:
             raise FloatingPointError("committed alpha must be finite and positive")
         for parameter, direction in proposal.soap_directions.items():
-            parameter.add_(direction, alpha=alpha)
+            parameter.add_(direction.to(device=parameter.device, dtype=parameter.dtype), alpha=alpha)
         for parameter, direction in proposal.auxiliary_directions.items():
-            parameter.add_(direction)
+            parameter.add_(direction.to(device=parameter.device, dtype=parameter.dtype))
         for parameter, candidate in proposal.next_states.items():
             self.state[parameter].clear()
             self.state[parameter].update(candidate)
@@ -612,8 +618,15 @@ class KLMatchedSOAP(Optimizer):
             for parameter in group["params"]:
                 parameter.grad = None
         refresh = getattr(self._fisher_evaluator, "refresh", None)
-        generation = int(refresh()) if refresh is not None else None
-        if generation is not None:
+        should_refresh = (
+            refresh is not None
+            and (self._factor_generation == 0
+                 or self._update_generation % self.fisher_refresh_frequency == 0)
+        )
+        generation = int(refresh()) if should_refresh else (
+            self._factor_generation if refresh is not None else None
+        )
+        if should_refresh:
             self._factor_generation = generation
             self._factor_count = int(getattr(self._fisher_evaluator, "factor_count", 0))
             if self._factor_count != len(proposal.soap_directions):
@@ -644,6 +657,7 @@ class KLMatchedSOAP(Optimizer):
             "actor/kl_matched/alpha_raw": raw_alpha,
             "actor/kl_matched/alpha": alpha,
             "actor/kl_matched/alpha_clamped": float(alpha != raw_alpha),
+            "actor/kl_matched/factor_refreshed": float(should_refresh),
             "actor/kl_matched/update": float(self._update_generation),
         }
         return None
@@ -683,6 +697,7 @@ class KLMatchedSOAP(Optimizer):
             "fisher_expected_states": self.fisher_expected_states,
             "fisher_factor_rank": self.fisher_factor_rank,
             "fisher_dense_threshold": self.fisher_dense_threshold,
+            "fisher_refresh_frequency": self.fisher_refresh_frequency,
         }
 
     def load_state_dict(self, state_dict):
@@ -996,6 +1011,10 @@ class FactorizedKFACFisher(FactorizedScoreFisher):
         except (KeyError, TypeError, ValueError) as error:
             raise RuntimeError("score-Fisher checkpoint generation/count is invalid") from error
         values = state.get("factors")
+        if generation == 0 or factor_count == 0:
+            if generation != 0 or factor_count != 0 or not isinstance(values, Mapping) or values:
+                raise RuntimeError("score-Fisher initial checkpoint state is inconsistent")
+            return {}, generation, factor_count
         if not isinstance(values, Mapping) or set(values) != set(self.named_parameters):
             raise RuntimeError("score-Fisher checkpoint factor ownership mismatch")
         if generation < 1 or factor_count != len(values) or factor_count != len(self.named_parameters):

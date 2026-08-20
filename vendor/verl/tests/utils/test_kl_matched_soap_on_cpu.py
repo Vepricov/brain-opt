@@ -148,6 +148,9 @@ def test_proposal_does_not_mutate_parameters_gradients_or_live_optimizer_state()
     proposal = optimizer.propose()
 
     assert proposal.generation == 0
+    assert all(direction.device.type == "cpu" for direction in proposal.adamw_directions.values())
+    assert all(direction.device.type == "cpu" for direction in proposal.soap_directions.values())
+    assert all(direction.device.type == "cpu" for direction in proposal.auxiliary_directions.values())
     for (_, parameter), value, gradient in zip(named, parameters_before, gradients_before, strict=True):
         assert torch.equal(parameter, value)
         assert parameter.grad is not None
@@ -203,6 +206,40 @@ def test_commit_advances_both_proposal_states_exactly_once_and_rejects_reuse():
         optimizer.commit(proposal, alpha=1.5)
     assert optimizer.state[soap_parameter]["soap_step"] == 1
     assert optimizer.state[soap_parameter]["adamw_step"] == 1
+
+
+def test_factor_refresh_is_reused_across_four_inner_ppo_updates():
+    optimizer, named = _optimizer(fisher_refresh_frequency=4)
+
+    class RecordingFactors(FactorizedScoreFisher):
+        probe_identity = {"algorithm": "qr_gaussian_antithetic_v1", "pairs": 2, "states": 57, "seed": 0}
+        factor_generation = 0
+        factor_count = 2
+
+        def __init__(self):
+            self.refresh_calls = 0
+
+        def refresh(self):
+            self.refresh_calls += 1
+            self.factor_generation += 1
+            return self.factor_generation
+
+        def __call__(self, directions, *, generation):
+            assert generation == self.factor_generation
+            return 0.5 * sum(float(direction.double().square().sum()) for direction in directions.values())
+
+    factors = RecordingFactors()
+    optimizer.bind_fisher_evaluator(
+        factors, {"policy": "test", "indices": list(range(16)), "count": 16,
+                  "occupied_response_states": 57, "sha256": "fixed"}
+    )
+    for update in range(5):
+        for _, parameter in named:
+            parameter.grad = torch.full_like(parameter, 0.1 + update * 0.01)
+        optimizer.step()
+    assert factors.refresh_calls == 2
+    assert factors.factor_generation == 2
+    assert optimizer._update_generation == 5
 
 
 def test_step_checkpoint_restore_preserves_shadow_soap_alpha_and_prompt_identity():
@@ -335,6 +372,18 @@ def test_score_fisher_state_roundtrip_is_exact_and_rejects_ppo_curvature_semanti
     with pytest.raises(TypeError, match="policy-score"):
         optimizer.bind_fisher_evaluator(ppo_curvature,
             {"count": 16, "occupied_response_states": 57})
+
+
+def test_score_fisher_initial_checkpoint_roundtrip_accepts_empty_generation_zero():
+    evaluator, _ = _causal_mixing_evaluator(2)
+    evaluator.factor_generation = evaluator.factor_count = 0
+    evaluator.factors = {}
+    checkpoint = copy.deepcopy(evaluator.state_dict())
+
+    restored, _ = _causal_mixing_evaluator(2)
+    restored.load_state_dict(checkpoint)
+
+    _assert_nested_equal(restored.state_dict(), checkpoint)
 
 
 def _causal_mixing_evaluator(sequence_length):
