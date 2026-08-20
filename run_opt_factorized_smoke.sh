@@ -8,9 +8,10 @@ OUTPUT_ROOT=${OUTPUT_ROOT:-$CAMPAIGN_ROOT/causal-kfac-soap-smoke-seed0}
 STATUS_PATH=$OUTPUT_ROOT/harness.status
 GPU_LOG=$OUTPUT_ROOT/gpu-memory.csv
 MAX_GPU_USED_MIB=${MAX_GPU_USED_MIB:-35840}
+MIN_GPU_FREE_MIB=${MIN_GPU_FREE_MIB:-5120}
 mkdir -p "$OUTPUT_ROOT"
 printf 'running\n' >"$STATUS_PATH"
-printf 'timestamp,memory_used_mib,memory_total_mib\n' >"$GPU_LOG"
+printf 'timestamp,memory_used_mib,memory_free_mib,memory_total_mib\n' >"$GPU_LOG"
 baseline_sample=$(nvidia-smi --id="$GPU_UUID" --query-gpu=memory.used --format=csv,noheader,nounits)
 BASELINE_GPU_USED_MIB=${baseline_sample//[[:space:]]/}
 [[ "$BASELINE_GPU_USED_MIB" =~ ^[0-9]+$ ]]
@@ -19,18 +20,20 @@ printf 'baseline_gpu_used_mib=%s\n' "$BASELINE_GPU_USED_MIB" >"$OUTPUT_ROOT/gpu-
 monitor_gpu() {
     while :; do
         timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        sample=$(nvidia-smi --id="$GPU_UUID" --query-gpu=memory.used,memory.total --format=csv,noheader,nounits || true)
+        sample=$(nvidia-smi --id="$GPU_UUID" --query-gpu=memory.used,memory.free,memory.total --format=csv,noheader,nounits || true)
         printf '%s,%s\n' "$timestamp" "$sample" >>"$GPU_LOG"
-        used=${sample%%,*}
+        IFS=, read -r used free total <<<"$sample"
         used=${used//[[:space:]]/}
-        if [[ ! "$used" =~ ^[0-9]+$ ]]; then
+        free=${free//[[:space:]]/}
+        if [[ ! "$used" =~ ^[0-9]+$ || ! "$free" =~ ^[0-9]+$ ]]; then
             sleep 2
             continue
         fi
         delta=$((used - BASELINE_GPU_USED_MIB))
-        if (( delta > MAX_GPU_USED_MIB )); then
-            printf 'gpu memory cap exceeded: total_used=%s MiB baseline=%s MiB delta=%s MiB cap=%s MiB\n' \
-                "$used" "$BASELINE_GPU_USED_MIB" "$delta" "$MAX_GPU_USED_MIB" >"$OUTPUT_ROOT/memory-cap-breach.txt"
+        if (( used > MAX_GPU_USED_MIB || free < MIN_GPU_FREE_MIB )); then
+            printf 'gpu memory guard exceeded: total_used=%s MiB baseline=%s MiB delta=%s MiB cap=%s MiB free=%s MiB minimum_free=%s MiB\n' \
+                "$used" "$BASELINE_GPU_USED_MIB" "$delta" "$MAX_GPU_USED_MIB" \
+                "$free" "$MIN_GPU_FREE_MIB" >"$OUTPUT_ROOT/memory-cap-breach.txt"
             kill -TERM -- "-$training_pid" 2>/dev/null || true
             return
         fi
@@ -47,8 +50,8 @@ cleanup() {
         kill "$monitor_pid" 2>/dev/null || true
         wait "$monitor_pid" 2>/dev/null || true
     fi
-    local peak=0 timestamp used total
-    while IFS=, read -r timestamp used total; do
+    local peak=0 timestamp used free total
+    while IFS=, read -r timestamp used free total; do
         used=${used//[[:space:]]/}
         if [[ "$used" =~ ^[0-9]+$ ]] && (( used > peak )); then
             peak=$used
@@ -65,7 +68,7 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export RL_MUON_CAMPAIGN_ROOT="$CAMPAIGN_ROOT"
 export RL_MUON_VERL_ROOT="$SCRIPT_ROOT/vendor/verl"
 export OUTPUT_ROOT
-export GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.20}
+export GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.10}
 # Ray's Unix sockets must be private to this harness.  A second smoke used to
 # rm the shared directory out from under a live raylet, leaving the driver and
 # actors alive while every replacement worker failed to connect forever.
