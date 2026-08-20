@@ -11,7 +11,7 @@ env \
     SEED="$SEED" \
     EXPECTED_STEP=150 \
     SAVE_FREQ=25 \
-    TEST_FREQ=10 \
+    TEST_FREQ=25 \
     RL_MUON_CAMPAIGN_ROOT="$CAMPAIGN_ROOT" \
     OUTPUT_ROOT="$OUTPUT_ROOT" \
     TMPDIR="${TMPDIR:-/dev/shm/rlm-kl-soap-tmp-s$SEED}" \

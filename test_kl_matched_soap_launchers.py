@@ -12,7 +12,7 @@ def test_production_launcher_has_exact_seed_step_validation_and_checkpoint_contr
     assert "0 25 50 75 100 125 150" in seed_runner
     assert "EXPECTED_STEP=150" in seed_runner
     assert "SAVE_FREQ=25" in seed_runner
-    assert "TEST_FREQ=10" in seed_runner
+    assert "TEST_FREQ=25" in seed_runner
     assert "for seed in 0 1 2" in campaign
     assert "critic.optim.optimizer=AdamW" in runner
     assert "critic.optim.optimizer_impl=torch.optim" in runner
