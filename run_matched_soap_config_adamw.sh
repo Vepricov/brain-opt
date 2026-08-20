@@ -164,7 +164,7 @@ cd "$VERL_ROOT"
     actor_rollout_ref.actor.optim.weight_decay=0.01 \
     actor_rollout_ref.actor.optim.override_optimizer_config="$ACTOR_OPTIMIZER_OVERRIDE" \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_SIZE:-1}" \
     actor_rollout_ref.actor.data_loader_seed="$SEED" \
     actor_rollout_ref.actor.fsdp_config.use_orig_params=True \
     actor_rollout_ref.actor.fsdp_config.seed="$SEED" \
@@ -172,8 +172,8 @@ cd "$VERL_ROOT"
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization="${GPU_MEMORY_UTILIZATION:-0.45}" \
     actor_rollout_ref.rollout.n=1 \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu="${ROLLOUT_LOGPROB_MICRO_BATCH_SIZE:-1}" \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="${REF_LOGPROB_MICRO_BATCH_SIZE:-1}" \
     critic.model.path="$MODEL_PATH" \
     +critic.model.override_config.attn_implementation=sdpa \
     critic.model.use_remove_padding=False \
@@ -184,7 +184,7 @@ cd "$VERL_ROOT"
     critic.optim.weight_decay=0.01 \
     critic.optim.override_optimizer_config='{eps: 1e-5}' \
     critic.ppo_mini_batch_size=64 \
-    critic.ppo_micro_batch_size_per_gpu=4 \
+    critic.ppo_micro_batch_size_per_gpu="${PPO_MICRO_BATCH_SIZE:-1}" \
     critic.data_loader_seed="$SEED" \
     critic.fsdp.use_orig_params=True \
     critic.fsdp.seed="$SEED" \

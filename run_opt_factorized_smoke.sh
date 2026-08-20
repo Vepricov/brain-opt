@@ -68,7 +68,7 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export RL_MUON_CAMPAIGN_ROOT="$CAMPAIGN_ROOT"
 export RL_MUON_VERL_ROOT="$SCRIPT_ROOT/vendor/verl"
 export OUTPUT_ROOT
-export GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.10}
+export GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.12}
 # Ray's Unix sockets must be private to this harness.  A second smoke used to
 # rm the shared directory out from under a live raylet, leaving the driver and
 # actors alive while every replacement worker failed to connect forever.

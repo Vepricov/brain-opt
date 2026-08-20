@@ -46,7 +46,7 @@ def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
     assert "VERL_ROOT=${RL_MUON_VERL_ROOT:-$repo_root/vendor/verl}" in runner
     assert "RAY_TMPDIR=${RAY_TMPDIR:-/tmp/rlm-kfac-ray-$$}" in opt_harness
     assert "RAY_TMPDIR=${RAY_TMPDIR:-/tmp/rlm-kfac-ray}" not in opt_harness
-    assert "GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.10}" in opt_harness
+    assert "GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.12}" in opt_harness
     assert "MIN_GPU_FREE_MIB=${MIN_GPU_FREE_MIB:-5120}" in opt_harness
     assert "free < MIN_GPU_FREE_MIB" in opt_harness
     assert "BASELINE_GPU_USED_MIB" in opt_harness

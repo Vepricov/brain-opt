@@ -38,7 +38,7 @@ while :; do
                 RL_MUON_CAMPAIGN_ROOT="$CAMPAIGN_ROOT" \
                 GPU_UUID="$best_uuid" \
                 OUTPUT_ROOT="$OUTPUT_ROOT" \
-                GPU_MEMORY_UTILIZATION=0.10 \
+                GPU_MEMORY_UTILIZATION=0.12 \
                 MAX_GPU_USED_MIB=35840 \
                 MIN_GPU_FREE_MIB=5120 \
                 bash "$SCRIPT_ROOT/run_opt_factorized_smoke.sh"
