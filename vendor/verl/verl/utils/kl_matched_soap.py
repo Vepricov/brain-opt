@@ -77,7 +77,8 @@ def exact_logits_jvp(
     The caller must ensure that the module tree has no active FSDP wrappers:
     functional parameter replacement is incompatible with their runtime hooks.
     """
-    from torch.func import functional_call
+    from torch.func import functional_call, jvp
+    from torch.nn.attention import SDPBackend, sdpa_kernel
 
     if not (len(parameter_names) == len(primals) == len(tangents)) or not primals:
         raise ValueError("parameter names, primals, and tangents must be non-empty and aligned")
@@ -87,16 +88,19 @@ def exact_logits_jvp(
         output = functional_call(module, replacements, (), dict(model_kwargs), strict=False)
         return output.logits if hasattr(output, "logits") else output
 
-    return cast(
-        tuple[Tensor, Tensor],
-        torch.autograd.functional.jvp(
-            logits_function,
-            tuple(primals),
-            v=tuple(tangents),
-            create_graph=False,
-            strict=True,
-        ),
-    )
+    # Flash/efficient SDPA kernels in torch 2.6 do not implement forward-mode
+    # AD.  The math kernel is algebraically equivalent and does, so constrain
+    # only this Fisher JVP rather than changing the PPO model's normal forwards.
+    with sdpa_kernel(SDPBackend.MATH):
+        return cast(
+            tuple[Tensor, Tensor],
+            jvp(
+                logits_function,
+                tuple(primals),
+                tuple(tangents),
+                strict=True,
+            ),
+        )
 
 
 @contextmanager

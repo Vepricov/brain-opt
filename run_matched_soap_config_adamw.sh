@@ -78,6 +78,40 @@ path.write_text(text.replace(old, new, 1))
 PY
 ) 9>"$CAMPAIGN_ROOT/.vllm-shared-gpu-sleep-patch.lock"
 
+# vLLM 0.8.5 assumes every CUDA_VISIBLE_DEVICES token is an integer.  Use
+# stable GPU UUIDs in launchers so CUDA ordinal reordering cannot select a
+# different physical card, and teach this older vLLM to resolve that UUID
+# through NVML when it needs the host physical index.
+VLLM_CUDA_PLATFORM=$CAMPAIGN_ROOT/venv/lib/python3.10/site-packages/vllm/platforms/cuda.py
+(
+    flock 9
+    python3 - "$VLLM_CUDA_PLATFORM" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+old = '''        physical_device_id = device_ids[device_id]
+        return int(physical_device_id)
+'''
+new = '''        physical_device_id = device_ids[device_id]
+        if physical_device_id.startswith("GPU-"):
+            pynvml.nvmlInit()
+            try:
+                handle = pynvml.nvmlDeviceGetHandleByUUID(physical_device_id)
+                return int(pynvml.nvmlDeviceGetIndex(handle))
+            finally:
+                pynvml.nvmlShutdown()
+        return int(physical_device_id)
+'''
+text = path.read_text()
+if new in text:
+    raise SystemExit(0)
+if old not in text:
+    raise SystemExit(f"unexpected vLLM CUDA device mapping in {path}")
+path.write_text(text.replace(old, new, 1))
+PY
+) 9>"$CAMPAIGN_ROOT/.vllm-cuda-uuid-patch.lock"
+
 cd "$VERL_ROOT"
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gae \
