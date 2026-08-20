@@ -40,6 +40,7 @@ def _named_parameters():
 
 def _optimizer(named=None, **kwargs):
     named = _named_parameters() if named is None else named
+    fisher_prompt_indices = kwargs.pop("fisher_prompt_indices", range(16))
     optimizer = KLMatchedSOAP(
         named,
         lr=0.01,
@@ -47,7 +48,7 @@ def _optimizer(named=None, **kwargs):
         eps=1e-5,
         soap_precondition_frequency=2,
         soap_max_precond_dim=8,
-        fisher_prompt_indices=range(16),
+        fisher_prompt_indices=fisher_prompt_indices,
         **kwargs,
     )
     class TestFactors(FactorizedScoreFisher):
@@ -240,6 +241,13 @@ def test_factor_refresh_is_reused_across_four_inner_ppo_updates():
     assert factors.refresh_calls == 2
     assert factors.factor_generation == 2
     assert optimizer._update_generation == 5
+
+
+def test_stratified_fast_fisher_accepts_four_distinct_prompts_but_not_fewer():
+    optimizer, _ = _optimizer(fisher_prompt_indices=[0, 4, 8, 12])
+    assert optimizer.fisher_prompt_indices == (0, 4, 8, 12)
+    with pytest.raises(ValueError, match="at least four distinct"):
+        _optimizer(fisher_prompt_indices=[0, 4, 8])
 
 
 def test_step_checkpoint_restore_preserves_shadow_soap_alpha_and_prompt_identity():

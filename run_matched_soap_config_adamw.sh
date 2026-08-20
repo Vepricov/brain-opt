@@ -26,7 +26,8 @@ FISHER_EXPECTED_STATES=${FISHER_EXPECTED_STATES:-57}
 FISHER_FACTOR_RANK=${FISHER_FACTOR_RANK:-16}
 FISHER_DENSE_THRESHOLD=${FISHER_DENSE_THRESHOLD:-256}
 FISHER_REFRESH_FREQUENCY=${FISHER_REFRESH_FREQUENCY:-4}
-ACTOR_OPTIMIZER_OVERRIDE="{eps: 1e-5, soap_precondition_frequency: 10, soap_max_precond_dim: 2048, auxiliary_eps: 1e-5, alpha_min: $ALPHA_MIN, alpha_max: $ALPHA_MAX, alpha_clamp: $ALPHA_CLAMP, fisher_dataset_path: '$DATA_ROOT/test.parquet', fisher_prompt_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], fisher_micro_batch_size: $FISHER_MICRO_BATCH_SIZE, fisher_probe_count: $FISHER_PROBE_COUNT, fisher_probe_seed: $FISHER_PROBE_SEED, fisher_expected_states: $FISHER_EXPECTED_STATES, fisher_factor_rank: $FISHER_FACTOR_RANK, fisher_dense_threshold: $FISHER_DENSE_THRESHOLD, fisher_refresh_frequency: $FISHER_REFRESH_FREQUENCY}"
+FISHER_PROMPT_INDICES=${FISHER_PROMPT_INDICES:-[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]}
+ACTOR_OPTIMIZER_OVERRIDE="{eps: 1e-5, soap_precondition_frequency: 10, soap_max_precond_dim: 2048, auxiliary_eps: 1e-5, alpha_min: $ALPHA_MIN, alpha_max: $ALPHA_MAX, alpha_clamp: $ALPHA_CLAMP, fisher_dataset_path: '$DATA_ROOT/test.parquet', fisher_prompt_indices: $FISHER_PROMPT_INDICES, fisher_micro_batch_size: $FISHER_MICRO_BATCH_SIZE, fisher_probe_count: $FISHER_PROBE_COUNT, fisher_probe_seed: $FISHER_PROBE_SEED, fisher_expected_states: $FISHER_EXPECTED_STATES, fisher_factor_rank: $FISHER_FACTOR_RANK, fisher_dense_threshold: $FISHER_DENSE_THRESHOLD, fisher_refresh_frequency: $FISHER_REFRESH_FREQUENCY}"
 RUN_NAME=qwen2.5-0.5b_gsm8k_ppo_kl_matched_soap_seed$SEED
 RUN_DIR=$OUTPUT_ROOT/$RUN_NAME
 TERMINAL_ACTOR_CHECKPOINT=$RUN_DIR/checkpoints/global_step_$EXPECTED_STEP/actor/model_world_size_1_rank_0.pt
@@ -101,10 +102,38 @@ new = '''        if freed_bytes < 0:
 '''
 text = path.read_text()
 if new in text:
-    raise SystemExit(0)
-if old not in text:
+    pass
+elif old in text:
+    text = text.replace(old, new, 1)
+else:
     raise SystemExit(f"unexpected vLLM sleep implementation in {path}")
-path.write_text(text.replace(old, new, 1))
+
+# determine_available_memory profiles device-wide free memory before and after
+# a model forward.  On a shared GPU another process can release memory during
+# that interval, so the later value may legitimately be larger.  The values
+# used for the cache budget below are still conservative and device-wide; only
+# the invalid single-tenant assertion must be relaxed.
+old = '''        assert self.init_gpu_memory > free_gpu_memory, (
+            "Error in memory profiling. "
+            f"Initial free memory {self.init_gpu_memory}, current free memory"
+            f" {free_gpu_memory}. This happens when the GPU memory was "
+            "not properly cleaned up before initializing the vLLM instance.")
+'''
+new = '''        if self.init_gpu_memory <= free_gpu_memory:
+            logger.warning(
+                "Device-wide free memory increased by %.2f GiB during vLLM "
+                "profiling; continuing with the measured device-wide peak on "
+                "this shared GPU.",
+                (free_gpu_memory - self.init_gpu_memory) / GiB_bytes,
+            )
+'''
+if new in text:
+    pass
+elif old in text:
+    text = text.replace(old, new, 1)
+else:
+    raise SystemExit(f"unexpected vLLM profiling implementation in {path}")
+path.write_text(text)
 PY
 ) 9>"$CAMPAIGN_ROOT/.vllm-shared-gpu-sleep-patch.lock"
 

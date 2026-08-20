@@ -28,10 +28,10 @@ def test_production_launcher_has_exact_seed_step_validation_and_checkpoint_contr
     ).read_text()
     assert "nvmlDeviceGetHandleByUUID" in runner
     assert "physical_device_id.startswith(\"GPU-\")" in runner
-    assert (
-        "fisher_prompt_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]"
-        in runner
-    )
+    assert "self.init_gpu_memory <= free_gpu_memory" in runner
+    assert "continuing with the measured device-wide peak" in runner
+    assert "FISHER_PROMPT_INDICES=${FISHER_PROMPT_INDICES:-[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]}" in runner
+    assert "fisher_prompt_indices: $FISHER_PROMPT_INDICES" in runner
 
 
 def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
