@@ -71,8 +71,15 @@ def exact_logits_jvp(
     tangents: Sequence[Tensor],
     model_kwargs: Mapping[str, Any],
 ) -> tuple[Tensor, Tensor]:
-    """Evaluate a model and its exact forward-mode logits JVP functionally."""
-    from torch.func import functional_call, jvp
+    """Evaluate a model and its exact logits JVP functionally.
+
+    Legacy nested FSDP reshard hooks rebind parameter ``.data`` after forward.
+    ``torch.func.jvp`` rejects that operation because it wraps the entire model
+    in a functorch transform.  ``torch.autograd.functional.jvp`` computes the
+    same exact directional derivative without imposing that incompatible
+    transform on FSDP runtime hooks.
+    """
+    from torch.func import functional_call
 
     if not (len(parameter_names) == len(primals) == len(tangents)) or not primals:
         raise ValueError("parameter names, primals, and tangents must be non-empty and aligned")
@@ -82,7 +89,16 @@ def exact_logits_jvp(
         output = functional_call(module, replacements, (), dict(model_kwargs), strict=False)
         return output.logits if hasattr(output, "logits") else output
 
-    return cast(tuple[Tensor, Tensor], jvp(logits_function, tuple(primals), tuple(tangents)))
+    return cast(
+        tuple[Tensor, Tensor],
+        torch.autograd.functional.jvp(
+            logits_function,
+            tuple(primals),
+            v=tuple(tangents),
+            create_graph=False,
+            strict=True,
+        ),
+    )
 
 
 def matched_alpha(
