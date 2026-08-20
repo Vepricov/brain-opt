@@ -244,11 +244,11 @@ def test_factor_refresh_is_reused_across_four_inner_ppo_updates():
     assert optimizer._update_generation == 5
 
 
-def test_fisher_requires_exactly_sixteen_distinct_prompts():
-    with pytest.raises(ValueError, match="exactly 16 distinct"):
-        _optimizer(fisher_prompt_indices=[0, 4, 8, 12])
-    with pytest.raises(ValueError, match="exactly 16 distinct"):
-        _optimizer(fisher_prompt_indices=list(range(15)) + [0])
+def test_stratified_fast_fisher_accepts_four_distinct_prompts_but_not_fewer():
+    optimizer, _ = _optimizer(fisher_prompt_indices=[0, 4, 8, 12])
+    assert optimizer.fisher_prompt_indices == (0, 4, 8, 12)
+    with pytest.raises(ValueError, match="at least four distinct"):
+        _optimizer(fisher_prompt_indices=[0, 4, 8])
 
 
 def test_step_checkpoint_restore_preserves_shadow_soap_alpha_and_prompt_identity():

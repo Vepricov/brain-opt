@@ -376,8 +376,9 @@ class KLMatchedSOAP(Optimizer):
             raise ValueError("KLMatchedSOAP requires non-empty SOAP matrix and AdamW auxiliary routes")
         if len(routed_names) != len(set(routed_names)) or set(routed_names) != set(all_names):
             raise ValueError("actor parameter ownership must be disjoint and exhaustive")
-        if len(tuple(fisher_prompt_indices)) != 16 or len(set(fisher_prompt_indices)) != 16:
-            raise ValueError("exactly 16 distinct Fisher prompt indices are required")
+        fisher_prompt_indices = tuple(fisher_prompt_indices)
+        if len(fisher_prompt_indices) < 4 or len(set(fisher_prompt_indices)) != len(fisher_prompt_indices):
+            raise ValueError("at least four distinct Fisher prompt indices are required")
         if min(soap_precondition_frequency, soap_max_precond_dim, fisher_micro_batch_size,
                fisher_expected_states, fisher_factor_rank, fisher_dense_threshold,
                fisher_refresh_frequency) < 1:
@@ -445,7 +446,9 @@ class KLMatchedSOAP(Optimizer):
     ) -> None:
         if getattr(evaluator, "semantics", None) != "policy_score_fisher_kfac":
             raise TypeError("KLMatchedSOAP requires policy-score K-FAC factors, not PPO curvature")
-        if prompt_identity.get("count") != 16 or prompt_identity.get("occupied_response_states") != self.fisher_expected_states:
+        if (prompt_identity.get("count") != len(self.fisher_prompt_indices)
+                or tuple(prompt_identity.get("indices", ())) != self.fisher_prompt_indices
+                or prompt_identity.get("occupied_response_states") != self.fisher_expected_states):
             raise RuntimeError("pinned Fisher set has wrong prompt or occupied-state count")
         if self._prompt_identity is not None and dict(self._prompt_identity) != dict(prompt_identity):
             raise RuntimeError("pinned Fisher prompt identity changed after optimizer binding")
