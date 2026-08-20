@@ -128,6 +128,10 @@ class BaseEngine:
         if self.is_mp_src_rank_with_outputs():
             assert "grad_norm" not in outputs["metrics"]
             outputs["metrics"]["grad_norm"] = grad_norm
+            for name, value in getattr(self, "_last_optimizer_metrics", {}).items():
+                if name in outputs["metrics"]:
+                    raise RuntimeError(f"optimizer telemetry collides with actor metric {name}")
+                outputs["metrics"][name] = value
         return outputs
 
     def infer_batch(self, data: TensorDict, loss_function: Optional[Callable] = None) -> Any:

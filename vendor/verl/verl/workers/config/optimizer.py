@@ -15,9 +15,8 @@ import warnings
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from torch import Tensor
-
 from omegaconf import MISSING
+from torch import Tensor
 
 from verl.base_config import BaseConfig
 
@@ -270,7 +269,10 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
     }
 
     optimizer_name_lower = config.optimizer.lower()
-    if "adam" in optimizer_name_lower or "ademamix" in optimizer_name_lower:
+    uses_adam_moments = (
+        "adam" in optimizer_name_lower or "ademamix" in optimizer_name_lower or optimizer_name_lower == "klmatchedsoap"
+    )
+    if uses_adam_moments:
         optimizer_args["betas"] = config.betas
 
     if config.override_optimizer_config is not None:

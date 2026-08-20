@@ -1,41 +1,28 @@
 #!/usr/bin/env bash
-# Seed-selectable matched SOAP/AdamW replication runner.
+# Seed-selectable causal per-update KL-matched SOAP runner.
 set -euo pipefail
 
-ROUTE=soap_actor
-ACTOR_ROUTE=${ACTOR_ROUTE:-soap}
 SEED=${SEED:-0}
 ACTOR_LR=${ACTOR_LR:-1e-6}
-SOAP_LR=${SOAP_LR:-$ACTOR_LR}
 EXPECTED_STEP=${EXPECTED_STEP:-150}
 SAVE_FREQ=${SAVE_FREQ:-$(( EXPECTED_STEP < 25 ? EXPECTED_STEP : 25 ))}
 TEST_FREQ=${TEST_FREQ:-$(( EXPECTED_STEP < 10 ? EXPECTED_STEP : 10 ))}
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CAMPAIGN_ROOT=${RL_MUON_CAMPAIGN_ROOT:-/home/shkodnik1917/rl_muon/jarvis-gsm8k-r4/campaign-4cdf62757063}
-VERL_ROOT=${RL_MUON_VERL_ROOT:-$CAMPAIGN_ROOT/verl}
+VERL_ROOT=${RL_MUON_VERL_ROOT:-$repo_root/vendor/verl}
 MODEL_PATH=${MODEL_PATH:-$CAMPAIGN_ROOT/models/qwen2.5-0.5b-instruct}
 DATA_ROOT=${DATA_ROOT:-$CAMPAIGN_ROOT/data/gsm8k}
 OUTPUT_ROOT=${OUTPUT_ROOT:-$CAMPAIGN_ROOT/soap-actor-adamw-critic-pilot-seed$SEED}
-case "$ACTOR_ROUTE" in
-    soap)
-        ACTOR_OPTIMIZER=SOAPWithAuxAdamW
-        ACTOR_OPTIMIZER_IMPL=soap_ppo
-        ACTOR_OPTIMIZER_OVERRIDE="{soap_lr: $SOAP_LR, soap_precondition_frequency: 10, soap_max_precond_dim: 2048, auxiliary_eps: 1e-5}"
-        RUN_NAME=qwen2.5-0.5b_gsm8k_ppo_soap_actor_adamw_critic_seed$SEED
-        ;;
-    adamw)
-        ROUTE=adamw_replay
-        ACTOR_OPTIMIZER=AdamW
-        ACTOR_OPTIMIZER_IMPL=torch.optim
-        ACTOR_OPTIMIZER_OVERRIDE='{eps: 1e-5}'
-        RUN_NAME=qwen2.5-0.5b_gsm8k_ppo_adamw_replay_seed$SEED
-        ;;
-    *) echo "ACTOR_ROUTE must be soap or adamw" >&2; exit 64 ;;
-esac
+ACTOR_OPTIMIZER=KLMatchedSOAP
+ACTOR_OPTIMIZER_IMPL=verl.utils.kl_matched_soap
+ALPHA_MIN=${ALPHA_MIN:-0.05}
+ALPHA_MAX=${ALPHA_MAX:-20.0}
+ALPHA_CLAMP=${ALPHA_CLAMP:-true}
+FISHER_MICRO_BATCH_SIZE=${FISHER_MICRO_BATCH_SIZE:-1}
+ACTOR_OPTIMIZER_OVERRIDE="{eps: 1e-5, soap_precondition_frequency: 10, soap_max_precond_dim: 2048, auxiliary_eps: 1e-5, alpha_min: $ALPHA_MIN, alpha_max: $ALPHA_MAX, alpha_clamp: $ALPHA_CLAMP, fisher_dataset_path: '$DATA_ROOT/test.parquet', fisher_prompt_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], fisher_micro_batch_size: $FISHER_MICRO_BATCH_SIZE}"
+RUN_NAME=qwen2.5-0.5b_gsm8k_ppo_kl_matched_soap_seed$SEED
 RUN_DIR=$OUTPUT_ROOT/$RUN_NAME
-SOAP_ACTOR_CHECKPOINT=$RUN_DIR/checkpoints/global_step_$EXPECTED_STEP/actor/model_world_size_1_rank_0.pt
-ADAMW_BASELINE_ROOT=${ADAMW_BASELINE_ROOT:-$CAMPAIGN_ROOT/comparison-seed$SEED}
-SKIP_ENDPOINT_EVAL=${SKIP_ENDPOINT_EVAL:-0}
+TERMINAL_ACTOR_CHECKPOINT=$RUN_DIR/checkpoints/global_step_$EXPECTED_STEP/actor/model_world_size_1_rank_0.pt
 
 [[ -s "$DATA_ROOT/train.parquet" && -s "$DATA_ROOT/test.parquet" ]] || {
     echo "Pinned real GSM8K parquet files are missing under $DATA_ROOT" >&2
@@ -43,24 +30,6 @@ SKIP_ENDPOINT_EVAL=${SKIP_ENDPOINT_EVAL:-0}
 }
 [[ -d "$MODEL_PATH" ]] || { echo "Pinned model is missing: $MODEL_PATH" >&2; exit 66; }
 [[ "$EXPECTED_STEP" =~ ^[1-9][0-9]*$ ]] || { echo "EXPECTED_STEP must be positive" >&2; exit 64; }
-if [[ "$ACTOR_ROUTE" == soap && "$SKIP_ENDPOINT_EVAL" != 1 && -z "${ADAMW_ACTOR_CHECKPOINT:-}" ]]; then
-    mapfile -d '' baseline_candidates < <(
-        find "$ADAMW_BASELINE_ROOT" -type f \
-            -path "*/checkpoints/global_step_$EXPECTED_STEP/actor/model_world_size_1_rank_0.pt" \
-            -print0 2>/dev/null
-    )
-    if (( ${#baseline_candidates[@]} != 1 )); then
-        echo "Expected exactly one step-$EXPECTED_STEP AdamW actor under $ADAMW_BASELINE_ROOT; found ${#baseline_candidates[@]}" >&2
-        exit 66
-    fi
-    ADAMW_ACTOR_CHECKPOINT=${baseline_candidates[0]}
-fi
-if [[ "$ACTOR_ROUTE" == soap && "$SKIP_ENDPOINT_EVAL" != 1 ]]; then
-[[ -f "$ADAMW_ACTOR_CHECKPOINT" ]] || {
-    echo "Same-step AdamW baseline actor checkpoint is missing: $ADAMW_ACTOR_CHECKPOINT" >&2
-    exit 66
-}
-fi
 mkdir -p "$RUN_DIR"
 
 export PATH="$CAMPAIGN_ROOT/venv/bin:$PATH"
@@ -166,24 +135,14 @@ python3 -m verl.trainer.main_ppo \
     trainer.total_training_steps="$EXPECTED_STEP" \
     trainer.save_freq="$SAVE_FREQ" \
     trainer.test_freq="$TEST_FREQ" \
-    trainer.max_actor_ckpt_to_keep=3 \
-    trainer.max_critic_ckpt_to_keep=3 \
+    +trainer.save_initial_checkpoint=True \
+    trainer.val_before_train=True \
+    trainer.max_actor_ckpt_to_keep=8 \
+    trainer.max_critic_ckpt_to_keep=8 \
     trainer.resume_mode=auto \
     "$@" 2>&1 | tee -a "$RUN_DIR/train.log"
 
-[[ -f "$SOAP_ACTOR_CHECKPOINT" ]] || {
-    echo "Terminal SOAP actor checkpoint is missing: $SOAP_ACTOR_CHECKPOINT" >&2
+[[ -f "$TERMINAL_ACTOR_CHECKPOINT" ]] || {
+    echo "Terminal KL-matched SOAP actor checkpoint is missing: $TERMINAL_ACTOR_CHECKPOINT" >&2
     exit 70
 }
-if [[ "$ACTOR_ROUTE" == adamw || "$SKIP_ENDPOINT_EVAL" == 1 ]]; then
-    exit 0
-fi
-python3 "$repo_root/evaluate_exact_categorical_kl.py" \
-    --model-path "$MODEL_PATH" \
-    --dataset "$DATA_ROOT/test.parquet" \
-    --baseline-checkpoint "$ADAMW_ACTOR_CHECKPOINT" \
-    --soap-checkpoint "$SOAP_ACTOR_CHECKPOINT" \
-    --expected-step "$EXPECTED_STEP" \
-    --device "${KL_EVAL_DEVICE:-cuda}" \
-    --output "$RUN_DIR/exact_categorical_kl.json"
-python3 "$repo_root/verify_soap_pilot.py" "$RUN_DIR" "$EXPECTED_STEP"

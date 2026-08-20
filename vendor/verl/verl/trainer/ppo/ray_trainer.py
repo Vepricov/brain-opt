@@ -1399,6 +1399,16 @@ class RayPPOTrainer:
                 self._shutdown_dump_executor()
                 return
 
+        # Stateful optimizers may need an auditable pre-update checkpoint. This
+        # uses the ordinary actor/critic/dataloader checkpoint flow so a resume
+        # from step zero restores optimizer metadata, schedulers, and RNG too.
+        if (
+            self.global_steps == 0
+            and self.config.trainer.get("save_initial_checkpoint", False)
+            and self.config.trainer.save_freq > 0
+        ):
+            self._save_checkpoint()
+
         if self.config.actor_rollout_ref.rollout.skip.get("enable", False):
             rollout_skip = RolloutSkip(self.config, self.async_rollout_manager)
             rollout_skip.wrap_generate_sequences()

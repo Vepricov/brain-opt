@@ -190,6 +190,9 @@ class FSDPEngine(BaseEngine):
         # This is used to import external_lib into the huggingface systems
         self._build_model_optimizer()
 
+        if getattr(self.optimizer, "requires_kl_matched_fisher", False):
+            self._bind_kl_matched_fisher()
+
         self.checkpoint_manager = FSDPCheckpointManager(
             model=self.module,
             optimizer=self.optimizer,
@@ -207,6 +210,32 @@ class FSDPEngine(BaseEngine):
         )
 
         log_gpu_memory_usage("After offload model/optimizer/grad during init", logger=logger)
+
+    def _bind_kl_matched_fisher(self):
+        """Bind the pinned exact-logits-JVP Fisher to KL-matched actor optimizers."""
+        from verl.utils.kl_matched_soap import ExactLogitsJVPFisher, build_teacher_forced_gsm8k
+
+        if not isinstance(self.module, FSDP):
+            raise RuntimeError("KLMatchedSOAP requires legacy FSDP, not FSDP2")
+        if torch.distributed.get_world_size() != 1 or not self.engine_config.use_orig_params:
+            raise RuntimeError("KLMatchedSOAP exact JVP requires one-rank FSDP with use_orig_params=True")
+        if not self.optimizer.fisher_dataset_path:
+            raise RuntimeError("KLMatchedSOAP requires fisher_dataset_path")
+        processor = self.model_config.get_processor()
+        tokenizer = getattr(processor, "tokenizer", processor)
+        input_ids, attention_mask, fisher_mask, identity = build_teacher_forced_gsm8k(
+            self.optimizer.fisher_dataset_path,
+            tokenizer,
+            self.optimizer.fisher_prompt_indices,
+        )
+        evaluator = ExactLogitsJVPFisher(
+            self.module,
+            input_ids,
+            attention_mask,
+            fisher_mask,
+            micro_batch_size=self.optimizer.fisher_micro_batch_size,
+        )
+        self.optimizer.bind_fisher_evaluator(evaluator, identity)
 
     def _init_device_mesh(self):
         world_size = torch.distributed.get_world_size()
@@ -691,6 +720,7 @@ class FSDPEngine(BaseEngine):
         if isinstance(grad_norm, DTensor):
             grad_norm = grad_norm.full_tensor()
 
+        self._last_optimizer_metrics = {}
         if scaler is not None:
             # scaler handles inf/nan skipping internally via _check_inf_per_device.
             scaler.step(self.optimizer)
@@ -702,6 +732,9 @@ class FSDPEngine(BaseEngine):
                 self.optimizer.zero_grad()
             else:
                 self.optimizer.step()
+
+        if torch.isfinite(grad_norm):
+            self._last_optimizer_metrics = dict(getattr(self.optimizer, "latest_telemetry", {}))
 
         if self._qat_enabled:
             from verl.utils.qat.core import invalidate_all_scales
