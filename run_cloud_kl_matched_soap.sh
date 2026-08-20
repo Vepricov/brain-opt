@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-mode=${1:?mode must be smoke or full}
+mode=${1:?mode must be speed, smoke, or full}
 seed=${2:-0}
-case "$mode" in smoke|full) ;; *) exit 64;; esac
+case "$mode" in speed|smoke|full) ;; *) exit 64;; esac
 case "$seed" in 0|1|2) ;; *) exit 64;; esac
 repo=$(cd "$(dirname "$0")" && pwd)
 commit=${RL_MUON_SOURCE_COMMIT:?missing source commit}
@@ -25,6 +25,19 @@ finish() {
 trap finish EXIT
 if [[ "$mode" == smoke ]]; then
   bash "$repo/smoke_kl_matched_soap_resume.sh"
+elif [[ "$mode" == speed ]]; then
+  export EXPECTED_STEP=1
+  export SAVE_FREQ=1
+  export TEST_FREQ=1
+  export FISHER_PROMPT_INDICES='[0,4,8,12]'
+  export FISHER_MICRO_BATCH_SIZE=4
+  export FISHER_PROBE_COUNT=2
+  export FISHER_PROBE_SEED=0
+  export FISHER_EXPECTED_STATES=12
+  export FISHER_FACTOR_RANK=16
+  export FISHER_DENSE_THRESHOLD=256
+  export FISHER_REFRESH_FREQUENCY=4
+  bash "$repo/run_kl_matched_soap_seed.sh"
 else
   bash "$repo/run_kl_matched_soap_seed.sh"
 fi
