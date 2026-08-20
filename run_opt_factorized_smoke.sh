@@ -11,6 +11,10 @@ MAX_GPU_USED_MIB=${MAX_GPU_USED_MIB:-35840}
 mkdir -p "$OUTPUT_ROOT"
 printf 'running\n' >"$STATUS_PATH"
 printf 'timestamp,memory_used_mib,memory_total_mib\n' >"$GPU_LOG"
+baseline_sample=$(nvidia-smi --id="$GPU_UUID" --query-gpu=memory.used --format=csv,noheader,nounits)
+BASELINE_GPU_USED_MIB=${baseline_sample//[[:space:]]/}
+[[ "$BASELINE_GPU_USED_MIB" =~ ^[0-9]+$ ]]
+printf 'baseline_gpu_used_mib=%s\n' "$BASELINE_GPU_USED_MIB" >"$OUTPUT_ROOT/gpu-memory-baseline.txt"
 
 monitor_gpu() {
     while :; do
@@ -19,9 +23,14 @@ monitor_gpu() {
         printf '%s,%s\n' "$timestamp" "$sample" >>"$GPU_LOG"
         used=${sample%%,*}
         used=${used//[[:space:]]/}
-        if [[ "$used" =~ ^[0-9]+$ ]] && (( used > MAX_GPU_USED_MIB )); then
-            printf 'gpu memory cap exceeded: used=%s MiB cap=%s MiB\n' \
-                "$used" "$MAX_GPU_USED_MIB" >"$OUTPUT_ROOT/memory-cap-breach.txt"
+        if [[ ! "$used" =~ ^[0-9]+$ ]]; then
+            sleep 2
+            continue
+        fi
+        delta=$((used - BASELINE_GPU_USED_MIB))
+        if (( delta > MAX_GPU_USED_MIB )); then
+            printf 'gpu memory cap exceeded: total_used=%s MiB baseline=%s MiB delta=%s MiB cap=%s MiB\n' \
+                "$used" "$BASELINE_GPU_USED_MIB" "$delta" "$MAX_GPU_USED_MIB" >"$OUTPUT_ROOT/memory-cap-breach.txt"
             kill -TERM -- "-$training_pid" 2>/dev/null || true
             return
         fi
@@ -45,7 +54,9 @@ cleanup() {
             peak=$used
         fi
     done <"$GPU_LOG"
-    printf 'peak_memory_used_mib=%s\n' "$peak" >"$OUTPUT_ROOT/gpu-memory-peak.txt"
+    local peak_delta=$((peak - BASELINE_GPU_USED_MIB))
+    printf 'peak_memory_used_mib=%s\nbaseline_memory_used_mib=%s\npeak_delta_memory_used_mib=%s\n' \
+        "$peak" "$BASELINE_GPU_USED_MIB" "$peak_delta" >"$OUTPUT_ROOT/gpu-memory-peak.txt"
 }
 trap cleanup EXIT
 

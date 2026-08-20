@@ -47,6 +47,9 @@ def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
     assert "RAY_TMPDIR=${RAY_TMPDIR:-/tmp/rlm-kfac-ray-$$}" in opt_harness
     assert "RAY_TMPDIR=${RAY_TMPDIR:-/tmp/rlm-kfac-ray}" not in opt_harness
     assert "GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.20}" in opt_harness
+    assert "BASELINE_GPU_USED_MIB" in opt_harness
+    assert "delta > MAX_GPU_USED_MIB" in opt_harness
+    assert "peak_delta_memory_used_mib" in opt_harness
 
 
 def test_production_launchers_preserve_a100_memory_reserve():
