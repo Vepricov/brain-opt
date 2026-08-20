@@ -269,11 +269,20 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                     model_state_dict = self.model.state_dict()
                     torch.save(model_state_dict, model_path)
                     log_with_rank(f"Saved model to {os.path.abspath(model_path)}", rank=self.rank, logger=logger)
+                    # FSDP1/NO_SHARD may materialize full CUDA tensors even when
+                    # the state-dict config requests CPU offload.  Do not keep
+                    # that transient copy alive while serializing the optimizer.
+                    del model_state_dict
+                    if is_cuda_available:
+                        torch.cuda.empty_cache()
 
                 if self.should_save_optimizer:
                     optimizer_state_dict = self.optimizer.state_dict()
                     torch.save(optimizer_state_dict, optim_path)
                     log_with_rank(f"Saved optim to {os.path.abspath(optim_path)}", rank=self.rank, logger=logger)
+                    del optimizer_state_dict
+                    if is_cuda_available:
+                        torch.cuda.empty_cache()
 
                 if self.should_save_extra:
                     lr_scheduler_state_dict = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None

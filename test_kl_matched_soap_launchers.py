@@ -30,8 +30,12 @@ def test_production_launcher_has_exact_seed_step_validation_and_checkpoint_contr
     assert "physical_device_id.startswith(\"GPU-\")" in runner
     assert "self.init_gpu_memory <= free_gpu_memory" in runner
     assert "continuing with the measured device-wide peak" in runner
-    assert "FISHER_PROMPT_INDICES=${FISHER_PROMPT_INDICES:-[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]}" in runner
-    assert "fisher_prompt_indices: $FISHER_PROMPT_INDICES" in runner
+    assert "RL_MUON_VLLM_KV_CACHE_CAP_MIB=${RL_MUON_VLLM_KV_CACHE_CAP_MIB:-2048}" in runner
+    assert "available_kv_cache_memory = min(" in runner
+    assert (
+        "fisher_prompt_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]"
+        in runner
+    )
 
 
 def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
@@ -49,9 +53,10 @@ def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
     assert "GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.12}" in opt_harness
     assert "MIN_GPU_FREE_MIB=${MIN_GPU_FREE_MIB:-5120}" in opt_harness
     assert "free < MIN_GPU_FREE_MIB" in opt_harness
-    assert "BASELINE_GPU_USED_MIB" in opt_harness
-    assert "delta > MAX_GPU_DELTA_MIB" in opt_harness
-    assert "peak_delta_memory_used_mib" in opt_harness
+    assert "own_gpu_memory_mib" in opt_harness
+    assert "own_used > MAX_GPU_DELTA_MIB" in opt_harness
+    assert "peak_own_memory_used_mib" in opt_harness
+    assert "OUTPUT_ROOT=$OUTPUT_ROOT" in opt_harness
 
 
 def test_production_launchers_preserve_a100_memory_reserve():
@@ -59,6 +64,24 @@ def test_production_launchers_preserve_a100_memory_reserve():
     pair_runner = (ROOT / "run_matched_soap_pair.sh").read_text()
     assert 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.20}"' in seed_runner
     assert 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.20}"' in pair_runner
+
+
+def test_factorized_production_claims_physical_gpu_and_enforces_resource_contract():
+    harness = (ROOT / "run_factorized_production.sh").read_text()
+    waiter = (ROOT / "wait_factorized_production.sh").read_text()
+    assert 'CUDA_VISIBLE_DEVICES="$GPU_UUID"' in harness
+    assert 'resolved_uuid" == "$GPU_UUID' in harness
+    assert "own_used > MAX_GPU_DELTA_MIB" in harness
+    assert "free < MIN_GPU_FREE_MIB" in harness
+    assert 'RL_MUON_VLLM_KV_CACHE_CAP_MIB=${RL_MUON_VLLM_KV_CACHE_CAP_MIB:-512}' in harness
+    assert "critic.fsdp.param_offload=True" in harness
+    assert "critic.fsdp.optimizer_offload=True" in harness
+    assert 'SEED="$SEED" bash "$SCRIPT_ROOT/run_kl_matched_soap_seed.sh"' in harness
+    assert "flock -n" in waiter
+    assert "MIN_START_FREE_MIB=$((PROJECTED_NEED_MIB + MIN_GPU_FREE_MIB))" in waiter
+    assert "MIN_MEM_AVAILABLE_MIB=$((HOST_RAM_PEAK_MIB + HOST_RAM_RESERVE_MIB))" in waiter
+    assert 'PROJECTED_NEED_MIB=${PROJECTED_NEED_MIB:-35840}' in waiter
+    assert 'MIN_GPU_FREE_MIB=${MIN_GPU_FREE_MIB:-5120}' in waiter
 
 
 def test_fsdp_proposal_hook_is_after_gradient_clipping_and_before_parameter_step():

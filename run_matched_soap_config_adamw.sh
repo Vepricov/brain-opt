@@ -26,8 +26,7 @@ FISHER_EXPECTED_STATES=${FISHER_EXPECTED_STATES:-57}
 FISHER_FACTOR_RANK=${FISHER_FACTOR_RANK:-16}
 FISHER_DENSE_THRESHOLD=${FISHER_DENSE_THRESHOLD:-256}
 FISHER_REFRESH_FREQUENCY=${FISHER_REFRESH_FREQUENCY:-4}
-FISHER_PROMPT_INDICES=${FISHER_PROMPT_INDICES:-[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]}
-ACTOR_OPTIMIZER_OVERRIDE="{eps: 1e-5, soap_precondition_frequency: 10, soap_max_precond_dim: 2048, auxiliary_eps: 1e-5, alpha_min: $ALPHA_MIN, alpha_max: $ALPHA_MAX, alpha_clamp: $ALPHA_CLAMP, fisher_dataset_path: '$DATA_ROOT/test.parquet', fisher_prompt_indices: $FISHER_PROMPT_INDICES, fisher_micro_batch_size: $FISHER_MICRO_BATCH_SIZE, fisher_probe_count: $FISHER_PROBE_COUNT, fisher_probe_seed: $FISHER_PROBE_SEED, fisher_expected_states: $FISHER_EXPECTED_STATES, fisher_factor_rank: $FISHER_FACTOR_RANK, fisher_dense_threshold: $FISHER_DENSE_THRESHOLD, fisher_refresh_frequency: $FISHER_REFRESH_FREQUENCY}"
+ACTOR_OPTIMIZER_OVERRIDE="{eps: 1e-5, soap_precondition_frequency: 10, soap_max_precond_dim: 2048, auxiliary_eps: 1e-5, alpha_min: $ALPHA_MIN, alpha_max: $ALPHA_MAX, alpha_clamp: $ALPHA_CLAMP, fisher_dataset_path: '$DATA_ROOT/test.parquet', fisher_prompt_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], fisher_micro_batch_size: $FISHER_MICRO_BATCH_SIZE, fisher_probe_count: $FISHER_PROBE_COUNT, fisher_probe_seed: $FISHER_PROBE_SEED, fisher_expected_states: $FISHER_EXPECTED_STATES, fisher_factor_rank: $FISHER_FACTOR_RANK, fisher_dense_threshold: $FISHER_DENSE_THRESHOLD, fisher_refresh_frequency: $FISHER_REFRESH_FREQUENCY}"
 RUN_NAME=qwen2.5-0.5b_gsm8k_ppo_kl_matched_soap_seed$SEED
 RUN_DIR=$OUTPUT_ROOT/$RUN_NAME
 TERMINAL_ACTOR_CHECKPOINT=$RUN_DIR/checkpoints/global_step_$EXPECTED_STEP/actor/model_world_size_1_rank_0.pt
@@ -47,6 +46,7 @@ export VERL_FILE_LOGGER_PATH="$RUN_DIR/metrics.jsonl"
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 export VLLM_USE_V1=1
+export RL_MUON_VLLM_KV_CACHE_CAP_MIB=${RL_MUON_VLLM_KV_CACHE_CAP_MIB:-2048}
 export TRITON_LIBCUDA_PATH=/lib/x86_64-linux-gnu
 export HF_HOME="$CAMPAIGN_ROOT/hf-cache"
 export TRANSFORMERS_CACHE="$CAMPAIGN_ROOT/hf-cache/hub"
@@ -133,6 +133,36 @@ elif old in text:
     text = text.replace(old, new, 1)
 else:
     raise SystemExit(f"unexpected vLLM profiling implementation in {path}")
+
+# gpu_memory_utilization is device-wide in vLLM 0.8.5, so the KV reservation
+# changes when an unrelated process on a shared GPU allocates or frees memory.
+# Keep utilization high enough to survive that movement, but cap our actual KV
+# cache to a fixed amount.  2 GiB covers the pinned 64 x 768-token rollout and
+# prevents foreign-memory changes from moving this workload across its 35 GiB
+# residency contract.
+old = '''        available_kv_cache_memory = (
+            total_gpu_memory * self.cache_config.gpu_memory_utilization -
+            peak_memory)
+
+        return int(available_kv_cache_memory)
+'''
+new = '''        available_kv_cache_memory = (
+            total_gpu_memory * self.cache_config.gpu_memory_utilization -
+            peak_memory)
+        kv_cache_cap_mib = int(os.environ.get("RL_MUON_VLLM_KV_CACHE_CAP_MIB", "0"))
+        if kv_cache_cap_mib > 0:
+            available_kv_cache_memory = min(
+                available_kv_cache_memory, kv_cache_cap_mib * 1024 * 1024
+            )
+
+        return int(available_kv_cache_memory)
+'''
+if new in text:
+    pass
+elif old in text:
+    text = text.replace(old, new, 1)
+else:
+    raise SystemExit(f"unexpected vLLM KV cache calculation in {path}")
 path.write_text(text)
 PY
 ) 9>"$CAMPAIGN_ROOT/.vllm-shared-gpu-sleep-patch.lock"
