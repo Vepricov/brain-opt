@@ -5,7 +5,9 @@ SCRIPT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CAMPAIGN_ROOT=${RL_MUON_CAMPAIGN_ROOT:-/home/shkodnik/rl_muon/jarvis-gsm8k-r4/campaign-4cdf62757063}
 OUTPUT_ROOT=${OUTPUT_ROOT:-$CAMPAIGN_ROOT/causal-kfac-soap-smoke-seed0-gmu020-reserve}
 WAIT_LOG=${WAIT_LOG:-$OUTPUT_ROOT.wait.log}
-MIN_START_FREE_MIB=${MIN_START_FREE_MIB:-39350}
+PROJECTED_NEED_MIB=${PROJECTED_NEED_MIB:-33006}
+MIN_GPU_FREE_MIB=${MIN_GPU_FREE_MIB:-5120}
+MIN_START_FREE_MIB=${MIN_START_FREE_MIB:-$((PROJECTED_NEED_MIB + MIN_GPU_FREE_MIB))}
 mkdir -p "$(dirname -- "$WAIT_LOG")"
 
 while :; do
@@ -31,16 +33,16 @@ while :; do
         rechecked_free=$(nvidia-smi --id="$best_uuid" --query-gpu=memory.free --format=csv,noheader,nounits)
         rechecked_free=${rechecked_free//[[:space:]]/}
         if [[ "$rechecked_free" =~ ^[0-9]+$ ]] && (( rechecked_free >= MIN_START_FREE_MIB )); then
-            printf '%s launching gpu=%s free=%s MiB projected_need=34183 MiB projected_remaining=%s MiB\n' \
+            printf '%s launching gpu=%s free=%s MiB projected_need=%s MiB projected_remaining=%s MiB\n' \
                 "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$best_uuid" "$rechecked_free" \
-                "$((rechecked_free - 34183))" >>"$WAIT_LOG"
+                "$PROJECTED_NEED_MIB" "$((rechecked_free - PROJECTED_NEED_MIB))" >>"$WAIT_LOG"
             exec env \
                 RL_MUON_CAMPAIGN_ROOT="$CAMPAIGN_ROOT" \
                 GPU_UUID="$best_uuid" \
                 OUTPUT_ROOT="$OUTPUT_ROOT" \
                 GPU_MEMORY_UTILIZATION=0.12 \
                 MAX_GPU_USED_MIB=35840 \
-                MIN_GPU_FREE_MIB=5120 \
+                MIN_GPU_FREE_MIB="$MIN_GPU_FREE_MIB" \
                 bash "$SCRIPT_ROOT/run_opt_factorized_smoke.sh"
         fi
     fi
