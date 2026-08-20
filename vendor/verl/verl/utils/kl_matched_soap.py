@@ -957,13 +957,31 @@ class FactorizedKFACFisher(FactorizedScoreFisher):
                         seed=self.probe_seed + start, device=device, dtype=torch.float32)
                     probes = probes * math.sqrt(states * logits.shape[-1])
                     probabilities = logits.detach().float()[mask].softmax(-1); rootp = probabilities.sqrt()
-                    for index, probe in enumerate(probes):
+                    positive_probes = probes[: len(probes) // 2]
+                    negative_rows: list[list[Tensor]] = []
+                    for index, probe in enumerate(positive_probes):
                         grad_selected = rootp * probe - probabilities * (rootp * probe).sum(-1, keepdim=True)
                         grad_logits = torch.zeros_like(logits); grad_logits[mask] = grad_selected.to(logits.dtype)
-                        gradients = torch.autograd.grad(logits, outputs, grad_outputs=grad_logits,
-                                                        retain_graph=index + 1 < len(probes))
-                        for (_name, parameter), gradient in zip(self.named_parameters.items(), gradients, strict=True):
-                            score_streams[parameter].add(gradient.detach()[active], scale=score_scale)
+                        gradients = torch.autograd.grad(
+                            logits, outputs, grad_outputs=grad_logits,
+                            retain_graph=index + 1 < len(positive_probes),
+                        )
+                        rows_for_probe = []
+                        for (_name, parameter), gradient in zip(
+                            self.named_parameters.items(), gradients, strict=True
+                        ):
+                            rows = gradient.detach()[active].to(device="cpu", dtype=torch.float32)
+                            score_streams[parameter].add(rows, scale=score_scale)
+                            rows_for_probe.append(rows)
+                        negative_rows.append(rows_for_probe)
+                    # VJP is linear: VJP(-probe) == -VJP(probe). Preserve the
+                    # exact stream order [g0, g1, -g0, -g1] without repeating
+                    # full reverse traversals or GPU-to-CPU transfers.
+                    for rows_for_probe in negative_rows:
+                        for parameter, rows in zip(
+                            self.named_parameters.values(), rows_for_probe, strict=True
+                        ):
+                            score_streams[parameter].add(-rows, scale=score_scale)
         finally:
             for handle in handles: handle.remove()
             root.train(was_training)

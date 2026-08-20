@@ -386,7 +386,7 @@ def test_score_fisher_initial_checkpoint_roundtrip_accepts_empty_generation_zero
     _assert_nested_equal(restored.state_dict(), checkpoint)
 
 
-def _causal_mixing_evaluator(sequence_length):
+def _causal_mixing_evaluator(sequence_length, probe_count=2):
     class CausalMixingLM(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -414,10 +414,29 @@ def _causal_mixing_evaluator(sequence_length):
     response_mask[:, -1] = True
     evaluator = FactorizedKFACFisher(
         model, ids, attention, response_mask, {"self_attn": model.self_attn.weight},
-        micro_batch_size=1, probe_count=2, probe_seed=11, factor_rank=16,
+        micro_batch_size=1, probe_count=probe_count, probe_seed=11, factor_rank=16,
     )
     evaluator.refresh()
     return evaluator, model.self_attn.weight
+
+
+def test_refresh_reuses_exact_antithetic_vjps(monkeypatch):
+    calls = 0
+    original_grad = torch.autograd.grad
+
+    def counted_grad(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_grad(*args, **kwargs)
+
+    monkeypatch.setattr(torch.autograd, "grad", counted_grad)
+    evaluator, parameter = _causal_mixing_evaluator(2, probe_count=4)
+    score_rows = evaluator.factors[parameter][1].rows
+
+    assert calls == 2
+    # Two active token rows per probe, ordered g0, g1, -g0, -g1.
+    assert torch.equal(score_rows[:2], -score_rows[4:6])
+    assert torch.equal(score_rows[2:4], -score_rows[6:8])
 
 
 def test_causal_prompt_positions_contribute_to_response_state_fisher_without_prompt_dilution():
