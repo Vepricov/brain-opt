@@ -131,7 +131,7 @@ class BaseEngine:
             for name, value in getattr(self, "_last_optimizer_metrics", {}).items():
                 if name in outputs["metrics"]:
                     raise RuntimeError(f"optimizer telemetry collides with actor metric {name}")
-                outputs["metrics"][name] = value
+                outputs["metrics"][name] = [value]
         return outputs
 
     def infer_batch(self, data: TensorDict, loss_function: Optional[Callable] = None) -> Any:
