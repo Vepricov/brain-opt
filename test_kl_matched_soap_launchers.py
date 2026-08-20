@@ -50,7 +50,7 @@ def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
     assert "MIN_GPU_FREE_MIB=${MIN_GPU_FREE_MIB:-5120}" in opt_harness
     assert "free < MIN_GPU_FREE_MIB" in opt_harness
     assert "BASELINE_GPU_USED_MIB" in opt_harness
-    assert "used > MAX_GPU_USED_MIB" in opt_harness
+    assert "delta > MAX_GPU_DELTA_MIB" in opt_harness
     assert "peak_delta_memory_used_mib" in opt_harness
 
 

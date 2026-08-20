@@ -7,7 +7,7 @@ GPU_UUID=${GPU_UUID:-GPU-5430d3bb-f055-7a03-62f9-36ce1cf238c8}
 OUTPUT_ROOT=${OUTPUT_ROOT:-$CAMPAIGN_ROOT/causal-kfac-soap-smoke-seed0}
 STATUS_PATH=$OUTPUT_ROOT/harness.status
 GPU_LOG=$OUTPUT_ROOT/gpu-memory.csv
-MAX_GPU_USED_MIB=${MAX_GPU_USED_MIB:-35840}
+MAX_GPU_DELTA_MIB=${MAX_GPU_DELTA_MIB:-45056}
 MIN_GPU_FREE_MIB=${MIN_GPU_FREE_MIB:-5120}
 mkdir -p "$OUTPUT_ROOT"
 printf 'running\n' >"$STATUS_PATH"
@@ -30,9 +30,9 @@ monitor_gpu() {
             continue
         fi
         delta=$((used - BASELINE_GPU_USED_MIB))
-        if (( used > MAX_GPU_USED_MIB || free < MIN_GPU_FREE_MIB )); then
-            printf 'gpu memory guard exceeded: total_used=%s MiB baseline=%s MiB delta=%s MiB cap=%s MiB free=%s MiB minimum_free=%s MiB\n' \
-                "$used" "$BASELINE_GPU_USED_MIB" "$delta" "$MAX_GPU_USED_MIB" \
+        if (( delta > MAX_GPU_DELTA_MIB || free < MIN_GPU_FREE_MIB )); then
+            printf 'gpu memory guard exceeded: total_used=%s MiB baseline=%s MiB delta=%s MiB delta_cap=%s MiB free=%s MiB minimum_free=%s MiB\n' \
+                "$used" "$BASELINE_GPU_USED_MIB" "$delta" "$MAX_GPU_DELTA_MIB" \
                 "$free" "$MIN_GPU_FREE_MIB" >"$OUTPUT_ROOT/memory-cap-breach.txt"
             kill -TERM -- "-$training_pid" 2>/dev/null || true
             return
