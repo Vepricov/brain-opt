@@ -16,7 +16,7 @@ env \
     OUTPUT_ROOT="$OUTPUT_ROOT" \
     TMPDIR="${TMPDIR:-/dev/shm/rlm-kl-soap-tmp-s$SEED}" \
     RAY_TMPDIR="${RAY_TMPDIR:-/dev/shm/rlm-kl-soap-ray-s$SEED}" \
-    GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.45}" \
+    GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.20}" \
     bash "$SCRIPT_ROOT/run_matched_soap_config_adamw.sh" "$@"
 
 run_dir="$OUTPUT_ROOT/qwen2.5-0.5b_gsm8k_ppo_kl_matched_soap_seed$SEED/checkpoints"

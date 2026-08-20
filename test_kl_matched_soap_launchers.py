@@ -36,6 +36,7 @@ def test_production_launcher_has_exact_seed_step_validation_and_checkpoint_contr
 
 def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
     smoke = (ROOT / "smoke_kl_matched_soap_resume.sh").read_text()
+    opt_harness = (ROOT / "run_opt_factorized_smoke.sh").read_text()
     runner = (ROOT / "run_matched_soap_config_adamw.sh").read_text()
     assert smoke.index("EXPECTED_STEP=1") < smoke.index("EXPECTED_STEP=2")
     assert "global_step_1/actor/optim_world_size_1_rank_0.pt" in smoke
@@ -43,6 +44,16 @@ def test_smoke_is_exactly_one_step_then_real_auto_resume_to_step_two():
     assert "trainer.resume_mode=auto" in runner
     assert "+trainer.save_initial_checkpoint=True" in runner
     assert "VERL_ROOT=${RL_MUON_VERL_ROOT:-$repo_root/vendor/verl}" in runner
+    assert "RAY_TMPDIR=${RAY_TMPDIR:-/tmp/rlm-kfac-ray-$$}" in opt_harness
+    assert "RAY_TMPDIR=${RAY_TMPDIR:-/tmp/rlm-kfac-ray}" not in opt_harness
+    assert "GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.20}" in opt_harness
+
+
+def test_production_launchers_preserve_a100_memory_reserve():
+    seed_runner = (ROOT / "run_kl_matched_soap_seed.sh").read_text()
+    pair_runner = (ROOT / "run_matched_soap_pair.sh").read_text()
+    assert 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.20}"' in seed_runner
+    assert 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.20}"' in pair_runner
 
 
 def test_fsdp_proposal_hook_is_after_gradient_clipping_and_before_parameter_step():

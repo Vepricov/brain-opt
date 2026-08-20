@@ -444,8 +444,10 @@ def test_refresh_streams_factor_samples_without_full_layer_concatenation():
 
 def test_optimizer_rejects_outer_inner_factor_generation_mismatch_before_mutation():
     evaluator, parameter = _causal_mixing_evaluator(2)
+    auxiliary = torch.nn.Parameter(torch.ones(2))
     optimizer = KLMatchedSOAP(
-        [("self_attn.weight", parameter)], lr=0.01, weight_decay=0.0,
+        [("self_attn.weight", parameter), ("input_layernorm.weight", auxiliary)],
+        lr=0.01, weight_decay=0.0,
         soap_max_precond_dim=8, fisher_prompt_indices=range(16),
         fisher_micro_batch_size=1, fisher_probe_count=2, fisher_probe_seed=11,
         fisher_factor_rank=16,

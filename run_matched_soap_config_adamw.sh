@@ -10,6 +10,7 @@ TEST_FREQ=${TEST_FREQ:-$(( EXPECTED_STEP < 10 ? EXPECTED_STEP : 10 ))}
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CAMPAIGN_ROOT=${RL_MUON_CAMPAIGN_ROOT:-/home/shkodnik1917/rl_muon/jarvis-gsm8k-r4/campaign-4cdf62757063}
 VERL_ROOT=${RL_MUON_VERL_ROOT:-$repo_root/vendor/verl}
+PYTHON_BIN=${PYTHON_BIN:-$CAMPAIGN_ROOT/venv/bin/python3}
 MODEL_PATH=${MODEL_PATH:-$CAMPAIGN_ROOT/models/qwen2.5-0.5b-instruct}
 DATA_ROOT=${DATA_ROOT:-$CAMPAIGN_ROOT/data/gsm8k}
 OUTPUT_ROOT=${OUTPUT_ROOT:-$CAMPAIGN_ROOT/soap-actor-adamw-critic-pilot-seed$SEED}
@@ -34,6 +35,7 @@ TERMINAL_ACTOR_CHECKPOINT=$RUN_DIR/checkpoints/global_step_$EXPECTED_STEP/actor/
     exit 66
 }
 [[ -d "$MODEL_PATH" ]] || { echo "Pinned model is missing: $MODEL_PATH" >&2; exit 66; }
+[[ -x "$PYTHON_BIN" ]] || { echo "Campaign Python is missing: $PYTHON_BIN" >&2; exit 66; }
 [[ "$EXPECTED_STEP" =~ ^[1-9][0-9]*$ ]] || { echo "EXPECTED_STEP must be positive" >&2; exit 64; }
 mkdir -p "$RUN_DIR"
 
@@ -50,6 +52,28 @@ export TMPDIR=${TMPDIR:-/dev/shm/rlm-soap-tmp-s$SEED}
 export RAY_TMPDIR=${RAY_TMPDIR:-/dev/shm/rlm-soap-ray-s$SEED}
 mkdir -p "$TMPDIR" "$RAY_TMPDIR"
 
+# Ray rejects workers whose Python patch version differs from the driver. A
+# relocated campaign can otherwise start the driver from one interpreter and
+# repeatedly respawn workers from another after a venv symlink repair. Fail
+# before allocating model memory unless the venv metadata and executable agree.
+"$PYTHON_BIN" - "$CAMPAIGN_ROOT/venv/pyvenv.cfg" <<'PY'
+from pathlib import Path
+import platform
+import sys
+
+cfg = {}
+for line in Path(sys.argv[1]).read_text().splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        cfg[key.strip()] = value.strip()
+configured = cfg.get("version")
+running = platform.python_version()
+if configured != running:
+    raise SystemExit(
+        f"campaign Python mismatch: pyvenv.cfg={configured!r}, executable={running!r}"
+    )
+PY
+
 # vLLM 0.8.5 measures device-wide free memory around sleep(). On a shared GPU,
 # an unrelated process may allocate concurrently and make the delta negative
 # even though vLLM successfully released its own tagged allocations. Keep the
@@ -57,7 +81,7 @@ mkdir -p "$TMPDIR" "$RAY_TMPDIR"
 VLLM_GPU_WORKER=$CAMPAIGN_ROOT/venv/lib/python3.10/site-packages/vllm/v1/worker/gpu_worker.py
 (
     flock 9
-    python3 - "$VLLM_GPU_WORKER" <<'PY'
+    "$PYTHON_BIN" - "$VLLM_GPU_WORKER" <<'PY'
 from pathlib import Path
 import sys
 
@@ -90,7 +114,7 @@ PY
 VLLM_CUDA_PLATFORM=$CAMPAIGN_ROOT/venv/lib/python3.10/site-packages/vllm/platforms/cuda.py
 (
     flock 9
-    python3 - "$VLLM_CUDA_PLATFORM" <<'PY'
+    "$PYTHON_BIN" - "$VLLM_CUDA_PLATFORM" <<'PY'
 from pathlib import Path
 import sys
 
@@ -118,7 +142,7 @@ PY
 ) 9>"$CAMPAIGN_ROOT/.vllm-cuda-uuid-patch.lock"
 
 cd "$VERL_ROOT"
-python3 -m verl.trainer.main_ppo \
+"$PYTHON_BIN" -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gae \
     algorithm.kl_ctrl.type=fixed \
     algorithm.kl_ctrl.kl_coef=0.001 \

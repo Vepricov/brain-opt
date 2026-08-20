@@ -798,6 +798,10 @@ class FactorizedKFACFisher(FactorizedScoreFisher):
             raise ValueError("K-FAC dimensions and owned matrices must be positive")
         if fisher_mask.shape != input_ids.shape or attention_mask.shape != input_ids.shape:
             raise ValueError("teacher-forced tensors must have matching shapes")
+        if torch.any(fisher_mask.bool() & ~attention_mask.bool()):
+            raise ValueError("Fisher response states must be attention-mask active")
+        if not torch.any(fisher_mask):
+            raise ValueError("teacher-forced Fisher mask must contain response states")
         self.module, self.input_ids = module, input_ids.cpu()
         self.attention_mask, self.fisher_mask = attention_mask.cpu(), fisher_mask.cpu()
         self.named_parameters = dict(named_parameters)
@@ -885,7 +889,11 @@ class FactorizedKFACFisher(FactorizedScoreFisher):
         modules = dict(root.named_modules()); missing = set(self.named_parameters) - set(modules)
         if missing: raise RuntimeError(f"K-FAC module names do not resolve: {sorted(missing)}")
         captures: dict[str, tuple[Tensor, Tensor]] = {}; handles = []
-        active_count = int(self.attention_mask.bool().sum().item())
+        active_count = 0
+        for start in range(0, self.input_ids.shape[0], self.micro_batch_size):
+            stop = min(start + self.micro_batch_size, self.input_ids.shape[0])
+            if torch.any(self.fisher_mask[start:stop]):
+                active_count += int(self.attention_mask[start:stop].bool().sum().item())
         response_count = int(self.fisher_mask.sum().item())
         if active_count < 1 or response_count < 1:
             raise RuntimeError("pinned Fisher set contains no active or response states")
