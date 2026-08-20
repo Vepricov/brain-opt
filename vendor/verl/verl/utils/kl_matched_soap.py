@@ -46,61 +46,205 @@ def partition_actor_parameters(
     return soap, auxiliary
 
 
-def categorical_fisher_quadratic(logits: Tensor, logits_jvp: Tensor, mask: Tensor) -> Tensor:
-    """Return ``0.5 d^T F d`` from exact categorical full-vocabulary logits JVPs."""
-    if logits.shape != logits_jvp.shape or logits.ndim != 3:
-        raise ValueError("logits and logits_jvp must have matching [batch, sequence, vocabulary] shapes")
-    if mask.shape != logits.shape[:-1]:
-        raise ValueError("Fisher mask must match logits without the vocabulary dimension")
-    selected_logits = logits.float()[mask]
-    selected_jvp = logits_jvp.float()[mask]
-    if selected_logits.numel() == 0:
-        raise ValueError("exact Fisher quadratic requires at least one teacher-forced state")
-    probabilities = selected_logits.softmax(dim=-1)
-    mean = (probabilities * selected_jvp).sum(dim=-1)
-    variance = (probabilities * selected_jvp.square()).sum(dim=-1) - mean.square()
-    value = 0.5 * variance.clamp_min(0).mean()
-    if not torch.isfinite(value):
-        raise FloatingPointError("exact Fisher quadratic is non-finite")
+def kfac_quadratic(direction: Tensor, activation_factor: Tensor, score_factor: Tensor) -> Tensor:
+    """Return ``0.5 tr(S dW A dW^T)`` without a Kronecker materialization."""
+    if direction.ndim != 2 or activation_factor.shape != (direction.shape[1], direction.shape[1]):
+        raise ValueError("activation factor does not match matrix direction")
+    if score_factor.shape != (direction.shape[0], direction.shape[0]):
+        raise ValueError("score factor does not match matrix direction")
+    work = direction.to(device=activation_factor.device, dtype=torch.float32)
+    value = 0.5 * torch.trace(score_factor.to(work.device) @ work @ activation_factor @ work.T)
+    if not torch.isfinite(value) or value < 0:
+        raise FloatingPointError("factorized Fisher quadratic is invalid")
     return value
 
 
-def exact_logits_jvp(
-    module: torch.nn.Module,
-    parameter_names: Sequence[str],
-    primals: Sequence[Tensor],
-    tangents: Sequence[Tensor],
-    model_kwargs: Mapping[str, Any],
-) -> tuple[Tensor, Tensor]:
-    """Evaluate a model and its exact logits JVP functionally.
+def _fixed_antithetic_probe(probabilities: Tensor, probe: int, seed: int) -> Tensor:
+    """Deterministic Walsh probes transformed by categorical Fisher's square root."""
+    indices = torch.arange(probabilities.shape[-1], device=probabilities.device, dtype=torch.int64)
+    code = (probe // 2) + 1 + seed * 131
+    bits = torch.bitwise_and(indices, code)
+    parity = bits.clone()
+    for shift in (32, 16, 8, 4, 2, 1):
+        parity.bitwise_xor_(parity >> shift)
+    signs = (1 - 2 * (parity & 1)).to(probabilities.dtype)
+    if probe % 2:
+        signs.neg_()
+    root = probabilities.clamp_min(0).sqrt()
+    projection = (root * signs).sum(dim=-1, keepdim=True)
+    return root * (signs - root * projection)
 
-    The caller must ensure that the module tree has no active FSDP wrappers:
-    functional parameter replacement is incompatible with their runtime hooks.
-    """
-    from torch.func import functional_call, jvp
-    from torch.nn.attention import SDPBackend, sdpa_kernel
 
-    if not (len(parameter_names) == len(primals) == len(tangents)) or not primals:
-        raise ValueError("parameter names, primals, and tangents must be non-empty and aligned")
+@dataclass(frozen=True)
+class CovarianceFactor:
+    """Covariance as normalized sample/sketch rows; never a wide d-by-d tensor."""
 
-    def logits_function(*values):
-        replacements = dict(zip(parameter_names, values, strict=True))
-        output = functional_call(module, replacements, (), dict(model_kwargs), strict=False)
-        return output.logits if hasattr(output, "logits") else output
+    rows: Tensor
+    dimension: int
+    representation: str
 
-    # Flash/efficient SDPA kernels in torch 2.6 do not implement forward-mode
-    # AD.  The math kernel is algebraically equivalent and does, so constrain
-    # only this Fisher JVP rather than changing the PPO model's normal forwards.
-    with torch.no_grad(), sdpa_kernel(SDPBackend.MATH):
-        return cast(
-            tuple[Tensor, Tensor],
-            jvp(
-                logits_function,
-                tuple(primals),
-                tuple(tangents),
-                strict=True,
-            ),
-        )
+    @classmethod
+    def from_samples(cls, samples: Tensor, *, max_rank: int, dense_threshold: int, sketch_seed: int):
+        if samples.ndim != 2 or samples.shape[0] == 0 or max_rank < 1:
+            raise ValueError("covariance samples must be a non-empty matrix and max_rank positive")
+        work = samples.detach().to(device="cpu", dtype=torch.float32)
+        if not torch.isfinite(work).all():
+            raise FloatingPointError("score-Fisher covariance samples are non-finite")
+        count, dimension = work.shape
+        if count <= max_rank:
+            rows, representation = work / math.sqrt(count), "empirical"
+        else:
+            generator = torch.Generator(device="cpu").manual_seed(int(sketch_seed))
+            signs = torch.randint(0, 2, (max_rank, count), generator=generator, dtype=torch.float32)
+            rows = signs.mul_(2).sub_(1).to(work.device) @ work / math.sqrt(max_rank * count)
+            representation = "sketch"
+        del dense_threshold  # allocation guard: this class never forms covariance matrices
+        return cls(rows.contiguous(), dimension, representation)
+
+    @property
+    def rank(self) -> int:
+        return self.rows.shape[0]
+
+    @property
+    def storage_bytes(self) -> int:
+        return self.rows.numel() * self.rows.element_size()
+
+    def state_dict(self):
+        return {"rows": self.rows, "dimension": self.dimension, "representation": self.representation}
+
+    @classmethod
+    def load(cls, state):
+        return cls(state["rows"].clone(), int(state["dimension"]), str(state["representation"]))
+
+
+class _StreamingCovariance:
+    """Online fixed-rank CPU sketch, consuming each sample batch once."""
+
+    def __init__(self, dimension: int, count: int, *, max_rank: int, seed: int) -> None:
+        if dimension < 1 or count < 1 or max_rank < 1:
+            raise ValueError("streaming covariance dimensions must be positive")
+        self.dimension, self.count = int(dimension), int(count)
+        self.rank = min(int(max_rank), self.count)
+        self._seen = 0
+        self._exact = self.count <= max_rank
+        self._rows = torch.zeros((self.rank, self.dimension), dtype=torch.float32)
+        self._generator = torch.Generator(device="cpu").manual_seed(int(seed))
+
+    def add(self, samples: Tensor, *, scale: float = 1.0) -> None:
+        work = samples.detach().to(device="cpu", dtype=torch.float32)
+        if work.ndim != 2 or work.shape[1] != self.dimension:
+            raise RuntimeError("streamed covariance sample dimension mismatch")
+        stop = self._seen + work.shape[0]
+        if stop > self.count or not torch.isfinite(work).all() or not math.isfinite(scale):
+            raise RuntimeError("invalid streamed covariance samples")
+        work = work.mul(float(scale))
+        if self._exact:
+            self._rows[self._seen:stop].copy_(work)
+        else:
+            signs = torch.randint(0, 2, (self.rank, work.shape[0]),
+                                  generator=self._generator, dtype=torch.float32)
+            self._rows.add_(signs.mul_(2).sub_(1) @ work)
+        self._seen = stop
+
+    def finalize(self) -> CovarianceFactor:
+        if self._seen != self.count:
+            raise RuntimeError(f"streamed covariance received {self._seen} of {self.count} rows")
+        denominator = math.sqrt(self.count if self._exact else self.rank * self.count)
+        return CovarianceFactor((self._rows / denominator).contiguous(), self.dimension,
+                                "empirical" if self._exact else "sketch")
+
+
+def _row_factor_quadratic(direction: Tensor, activation: CovarianceFactor,
+                          score: CovarianceFactor) -> float:
+    """Evaluate one row-factor block entirely on CPU in fp32."""
+    # Directions normally live on the actor GPU while persistent factors are
+    # CPU fp32. Copy only this matrix; never create fp64/full-factor GPU temps.
+    work = direction.detach().to(device="cpu", dtype=torch.float32)
+    product = score.rows @ work @ activation.rows.T
+    value = 0.5 * product.square().sum()
+    if not torch.isfinite(value) or value < 0:
+        raise FloatingPointError("factorized score-Fisher quadratic is invalid")
+    return float(value.item())
+
+
+def factorized_fisher_quadratic(factors, directions: Mapping[str, Tensor]) -> float:
+    """Return .5 sum tr(S dW A dW^T) using row factors only."""
+    total = 0.0
+    for name, direction in directions.items():
+        if name not in factors:
+            raise KeyError(f"missing score-Fisher factors for {name}")
+        score, activation = factors[name]
+        if tuple(direction.shape) != (score.dimension, activation.dimension):
+            raise ValueError(f"direction shape does not match factors for {name}")
+        total += _row_factor_quadratic(direction, activation, score)
+    value = float(total)
+    if not math.isfinite(value):
+        raise FloatingPointError("factorized score-Fisher quadratic is non-finite")
+    return value
+
+
+def orthogonal_antithetic_probes(states: int, vocabulary: int, *, pairs: int, seed: int,
+                                  dtype=torch.float32, device="cpu"):
+    """Return deterministic QR-orthogonal logit probes and exact negatives."""
+    if states < 1 or vocabulary < 2 or pairs < 1 or pairs > states * vocabulary:
+        raise ValueError("invalid score-Fisher probe dimensions")
+    generator = torch.Generator(device="cpu").manual_seed(int(seed))
+    gaussian = torch.randn(states * vocabulary, pairs, generator=generator, dtype=torch.float64)
+    orthogonal, _ = torch.linalg.qr(gaussian, mode="reduced")
+    base = orthogonal.T.reshape(pairs, states, vocabulary).to(device=device, dtype=dtype)
+    probes = torch.cat((base, -base), dim=0)
+    identity = {
+        "algorithm": "qr_gaussian_antithetic_v1", "seed": int(seed), "pairs": pairs,
+        "states": states, "vocabulary": vocabulary,
+        "sha256": hashlib.sha256(base.cpu().double().numpy().tobytes()).hexdigest(),
+    }
+    return probes, identity
+
+
+class FactorizedScoreFisher:
+    """Fixed policy-score K-FAC factors for SOAP-owned linear matrices."""
+
+    semantics = "policy_score_fisher_kfac"
+
+    def __init__(self, parameters, factors, prompt_identity, probe_identity):
+        self._name_by_parameter = dict(parameters)
+        self.factors = dict(factors)
+        self.prompt_identity = dict(prompt_identity)
+        self.probe_identity = dict(probe_identity)
+
+    @classmethod
+    def from_factors(cls, named_parameters, factors, *, prompt_identity, probe_seed, probe_pairs):
+        named_parameters = list(named_parameters)
+        probe_identity = {"algorithm": "qr_gaussian_antithetic_v1", "seed": int(probe_seed),
+                          "pairs": int(probe_pairs),
+                          "states": int(prompt_identity["occupied_response_states"])}
+        return cls({parameter: name for name, parameter in named_parameters}, factors,
+                   prompt_identity, probe_identity)
+
+    def __call__(self, directions: Mapping[Tensor, Tensor]) -> float:
+        try:
+            named = {self._name_by_parameter[parameter]: direction for parameter, direction in directions.items()}
+        except KeyError as error:
+            raise RuntimeError("SOAP direction has no score-Fisher factors") from error
+        return factorized_fisher_quadratic(self.factors, named)
+
+    def state_dict(self):
+        return {"version": 1, "semantics": self.semantics,
+                "prompt_identity": copy.deepcopy(self.prompt_identity),
+                "probe_identity": copy.deepcopy(self.probe_identity),
+                "factors": {name: {"score": score.state_dict(), "activation": activation.state_dict()}
+                            for name, (score, activation) in self.factors.items()}}
+
+    def load_state_dict(self, state):
+        if state.get("semantics") != self.semantics:
+            raise RuntimeError("checkpoint curvature is not policy-score Fisher")
+        if state.get("prompt_identity") != self.prompt_identity or state.get("probe_identity") != self.probe_identity:
+            raise RuntimeError("checkpoint Fisher prompt/probe identity does not match this run")
+        restored = {name: (CovarianceFactor.load(pair["score"]), CovarianceFactor.load(pair["activation"]))
+                    for name, pair in state["factors"].items()}
+        if restored.keys() != self.factors.keys():
+            raise RuntimeError("checkpoint score-Fisher factor ownership does not match this run")
+        self.factors = restored
 
 
 @contextmanager
@@ -192,7 +336,7 @@ def _project_back(matrix: Tensor, left: Tensor | None, right: Tensor | None) -> 
 
 
 class KLMatchedSOAP(Optimizer):
-    """SOAP actor matrices with per-update exact-Fisher AdamW matching."""
+    """SOAP actor matrices with per-update factorized score-Fisher matching."""
 
     requires_named_parameters = True
     requires_kl_matched_fisher = True
@@ -217,6 +361,11 @@ class KLMatchedSOAP(Optimizer):
         fisher_dataset_path: str | None = None,
         fisher_prompt_indices: Sequence[int] = tuple(range(16)),
         fisher_micro_batch_size: int = 1,
+        fisher_probe_count: int = 4,
+        fisher_probe_seed: int = 0,
+        fisher_expected_states: int = 57,
+        fisher_factor_rank: int = 16,
+        fisher_dense_threshold: int = 256,
     ) -> None:
         named_parameters = list(named_parameters)
         soap_named, auxiliary_named = partition_actor_parameters(named_parameters)
@@ -228,8 +377,11 @@ class KLMatchedSOAP(Optimizer):
             raise ValueError("actor parameter ownership must be disjoint and exhaustive")
         if len(tuple(fisher_prompt_indices)) != 16 or len(set(fisher_prompt_indices)) != 16:
             raise ValueError("exactly 16 distinct Fisher prompt indices are required")
-        if soap_precondition_frequency < 1 or soap_max_precond_dim < 1 or fisher_micro_batch_size < 1:
-            raise ValueError("SOAP frequency, maximum dimension, and Fisher micro batch size must be positive")
+        if min(soap_precondition_frequency, soap_max_precond_dim, fisher_micro_batch_size,
+               fisher_expected_states, fisher_factor_rank, fisher_dense_threshold) < 1:
+            raise ValueError("SOAP and Fisher dimensions/counts must be positive")
+        if fisher_probe_count < 2 or fisher_probe_count % 2:
+            raise ValueError("Fisher probes must contain deterministic antithetic pairs")
         matched_alpha(1.0, 1.0, minimum=alpha_min, maximum=alpha_max, clamp=alpha_clamp)
 
         defaults = {"lr": lr, "weight_decay": weight_decay}
@@ -270,8 +422,16 @@ class KLMatchedSOAP(Optimizer):
         self.fisher_dataset_path = fisher_dataset_path
         self.fisher_prompt_indices = tuple(int(index) for index in fisher_prompt_indices)
         self.fisher_micro_batch_size = int(fisher_micro_batch_size)
+        self.fisher_probe_count = int(fisher_probe_count)
+        self.fisher_probe_seed = int(fisher_probe_seed)
+        self.fisher_expected_states = int(fisher_expected_states)
+        self.fisher_factor_rank = int(fisher_factor_rank)
+        self.fisher_dense_threshold = int(fisher_dense_threshold)
         self._fisher_evaluator: Callable[[Mapping[Tensor, Tensor]], float] | None = None
         self._prompt_identity: Mapping[str, Any] | None = None
+        self._probe_identity: Mapping[str, Any] | None = None
+        self._factor_generation = 0
+        self._factor_count = 0
         self._update_generation = 0
         self.latest_telemetry: dict[str, float] = {}
 
@@ -280,10 +440,25 @@ class KLMatchedSOAP(Optimizer):
         evaluator: Callable[[Mapping[Tensor, Tensor]], float],
         prompt_identity: Mapping[str, Any],
     ) -> None:
+        if getattr(evaluator, "semantics", None) != "policy_score_fisher_kfac":
+            raise TypeError("KLMatchedSOAP requires policy-score K-FAC factors, not PPO curvature")
+        if prompt_identity.get("count") != 16 or prompt_identity.get("occupied_response_states") != self.fisher_expected_states:
+            raise RuntimeError("pinned Fisher set has wrong prompt or occupied-state count")
         if self._prompt_identity is not None and dict(self._prompt_identity) != dict(prompt_identity):
             raise RuntimeError("pinned Fisher prompt identity changed after optimizer binding")
         self._fisher_evaluator = evaluator
         self._prompt_identity = dict(prompt_identity)
+        probe_identity = evaluator.probe_identity
+        algorithm = probe_identity.get("algorithm")
+        if algorithm not in ("qr_gaussian_antithetic_v1", "qr_gaussian_antithetic_v2") or probe_identity.get("seed") != self.fisher_probe_seed:
+            raise RuntimeError("K-FAC probe identity does not match optimizer configuration")
+        if algorithm == "qr_gaussian_antithetic_v2" and (
+                probe_identity.get("micro_batch_size") != self.fisher_micro_batch_size
+                or probe_identity.get("probe_count") != self.fisher_probe_count
+                or probe_identity.get("pairs") != self.fisher_probe_count // 2
+                or not probe_identity.get("partitions")):
+            raise RuntimeError("K-FAC probe manifest does not match optimizer configuration")
+        self._probe_identity = copy.deepcopy(probe_identity)
 
     def _adamw_proposal(self, parameter: Tensor, gradient: Tensor, state: Mapping[str, Any], eps: float):
         next_state = _clone_state(state)
@@ -436,12 +611,25 @@ class KLMatchedSOAP(Optimizer):
         for group in self.param_groups:
             for parameter in group["params"]:
                 parameter.grad = None
+        refresh = getattr(self._fisher_evaluator, "refresh", None)
+        generation = int(refresh()) if refresh is not None else None
+        if generation is not None:
+            self._factor_generation = generation
+            self._factor_count = int(getattr(self._fisher_evaluator, "factor_count", 0))
+            if self._factor_count != len(proposal.soap_directions):
+                raise RuntimeError("K-FAC factor count does not match SOAP matrix count")
         with torch.enable_grad():
-            q_adamw = float(self._fisher_evaluator(proposal.adamw_directions))
+            if generation is None:
+                q_adamw = float(self._fisher_evaluator(proposal.adamw_directions))
+            else:
+                q_adamw = float(self._fisher_evaluator(proposal.adamw_directions, generation=generation))
             # The AdamW shadow direction is needed only for its Fisher scalar;
             # commit applies the SOAP direction and advances both shadow states.
             proposal.adamw_directions.clear()
-            q_soap = float(self._fisher_evaluator(proposal.soap_directions))
+            if generation is None:
+                q_soap = float(self._fisher_evaluator(proposal.soap_directions))
+            else:
+                q_soap = float(self._fisher_evaluator(proposal.soap_directions, generation=generation))
         alpha, raw_alpha = matched_alpha(
             q_adamw,
             q_soap,
@@ -463,11 +651,15 @@ class KLMatchedSOAP(Optimizer):
     def state_dict(self):
         result = super().state_dict()
         result["kl_matched_soap"] = {
-            "version": 1,
+            "version": 2,
             "update_generation": self._update_generation,
             "prompt_identity": copy.deepcopy(self._prompt_identity),
             "latest_telemetry": dict(self.latest_telemetry),
             "configuration": self._checkpoint_configuration(),
+            "probe_identity": copy.deepcopy(self._probe_identity),
+            "factor_generation": self._factor_generation,
+            "factor_count": self._factor_count,
+            "fisher_state": self._fisher_evaluator.state_dict() if self._fisher_evaluator is not None else None,
         }
         return result
 
@@ -486,20 +678,51 @@ class KLMatchedSOAP(Optimizer):
             "alpha_clamp": self.alpha_clamp,
             "fisher_prompt_indices": self.fisher_prompt_indices,
             "fisher_micro_batch_size": self.fisher_micro_batch_size,
+            "fisher_probe_count": self.fisher_probe_count,
+            "fisher_probe_seed": self.fisher_probe_seed,
+            "fisher_expected_states": self.fisher_expected_states,
+            "fisher_factor_rank": self.fisher_factor_rank,
+            "fisher_dense_threshold": self.fisher_dense_threshold,
         }
 
     def load_state_dict(self, state_dict):
         state_dict = dict(state_dict)
         metadata = state_dict.pop("kl_matched_soap", None)
-        if metadata is None:
+        if not isinstance(metadata, Mapping) or metadata.get("version") != 2:
             raise RuntimeError("KLMatchedSOAP checkpoint is missing causal proposal metadata")
         restored_identity = metadata.get("prompt_identity")
         if self._prompt_identity is None or restored_identity != self._prompt_identity:
             raise RuntimeError("checkpoint pinned Fisher prompt identity does not match this run")
         if metadata.get("configuration") != self._checkpoint_configuration():
             raise RuntimeError("checkpoint KLMatchedSOAP configuration does not match this run")
+        if metadata.get("probe_identity") != self._probe_identity:
+            raise RuntimeError("checkpoint K-FAC probe identity does not match this run")
+        try:
+            factor_count = int(metadata["factor_count"])
+            factor_generation = int(metadata["factor_generation"])
+            update_generation = int(metadata["update_generation"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("checkpoint K-FAC generation/count is invalid") from error
+        expected_count = len(self.parameter_routes["soap_matrix"])
+        if factor_generation < 0 or update_generation < 0 or (
+                (factor_generation == 0 and factor_count != 0)
+                or (factor_generation > 0 and factor_count != expected_count)):
+            raise RuntimeError("checkpoint K-FAC factor count/generation mismatch")
+        fisher_state = metadata.get("fisher_state")
+        if self._fisher_evaluator is None or fisher_state is None:
+            raise RuntimeError("checkpoint is missing score-Fisher factors")
+        validate = getattr(self._fisher_evaluator, "validate_state_dict", None)
+        if validate is not None:
+            _restored, inner_generation, inner_count = validate(fisher_state)
+            if inner_generation != factor_generation or inner_count != factor_count:
+                raise RuntimeError("checkpoint outer/inner K-FAC generation/count mismatch")
+        # All K-FAC metadata and payloads are validated before base optimizer
+        # state (which mutates live tensors/dicts) is restored.
         super().load_state_dict(state_dict)
-        self._update_generation = int(metadata["update_generation"])
+        self._fisher_evaluator.load_state_dict(fisher_state)
+        self._update_generation = update_generation
+        self._factor_generation = factor_generation
+        self._factor_count = factor_count
         self.latest_telemetry = dict(metadata.get("latest_telemetry", {}))
 
 
@@ -550,72 +773,251 @@ def build_teacher_forced_gsm8k(
         "policy": "fixed_gsm8k_teacher_forced_v1",
         "indices": list(prompt_indices),
         "count": len(prompt_indices),
+        "occupied_response_states": int(fisher_mask.sum().item()),
         "sha256": hashlib.sha256(json.dumps(digest_payload, sort_keys=True).encode()).hexdigest(),
     }
     return input_ids, attention_mask, fisher_mask, identity
 
 
-class ExactLogitsJVPFisher:
-    """Exact full-vocabulary logits-JVP Fisher evaluator for one-rank FSDP."""
+class FactorizedKFACFisher(FactorizedScoreFisher):
+    """Collect policy-score K-FAC factors as bounded-rank normalized rows.
 
-    def __init__(
-        self,
-        fsdp_module: torch.nn.Module,
-        input_ids: Tensor,
-        attention_mask: Tensor,
-        fisher_mask: Tensor,
-        micro_batch_size: int = 1,
-    ) -> None:
-        self.fsdp_module = fsdp_module
-        self.input_ids = input_ids
-        self.attention_mask = attention_mask
-        self.fisher_mask = fisher_mask
-        self.micro_batch_size = micro_batch_size
+    The factors are deliberately computed from fixed logit-space score probes,
+    never from the PPO loss gradients used by SOAP itself.
+    """
 
-    def __call__(self, directions: Mapping[Tensor, Tensor]) -> float:
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+    semantics = "policy_score_fisher_kfac"
 
-        if not isinstance(self.fsdp_module, FSDP):
-            raise RuntimeError("exact Fisher integration requires legacy FSDP")
-        if torch.distributed.get_world_size() != 1:
-            raise RuntimeError("exact Fisher logits-JVP currently requires one-rank FSDP")
-        module = self.fsdp_module._fsdp_wrapped_module
-        was_training = module.training
-        module.eval()
+    def __init__(self, module: torch.nn.Module, input_ids: Tensor, attention_mask: Tensor,
+                 fisher_mask: Tensor, named_parameters: Mapping[str, Tensor],
+                 micro_batch_size: int = 1, probe_count: int = 4, probe_seed: int = 0,
+                 factor_rank: int = 16, dense_threshold: int = 256) -> None:
+        if probe_count < 2 or probe_count % 2:
+            raise ValueError("K-FAC probe count must contain antithetic pairs")
+        if min(micro_batch_size, factor_rank, dense_threshold) < 1 or not named_parameters:
+            raise ValueError("K-FAC dimensions and owned matrices must be positive")
+        if fisher_mask.shape != input_ids.shape or attention_mask.shape != input_ids.shape:
+            raise ValueError("teacher-forced tensors must have matching shapes")
+        self.module, self.input_ids = module, input_ids.cpu()
+        self.attention_mask, self.fisher_mask = attention_mask.cpu(), fisher_mask.cpu()
+        self.named_parameters = dict(named_parameters)
+        self.micro_batch_size, self.probe_count, self.probe_seed = int(micro_batch_size), int(probe_count), int(probe_seed)
+        self.factor_rank, self.dense_threshold = int(factor_rank), int(dense_threshold)
+        self.factor_generation = self.factor_count = 0
+        self.factors: dict[Tensor, tuple[CovarianceFactor, CovarianceFactor]] = {}
+        # Built before optimizer binding/checkpoint loading and tied to the
+        # exact partitioned tensors that refresh() will use.
+        self._probe_identity = self._build_probe_identity()
+
+    def _vocabulary_size(self) -> int:
+        root = self._unwrapped_module()
+        vocabulary = getattr(getattr(root, "config", None), "vocab_size", None)
+        if vocabulary is None and hasattr(root, "get_output_embeddings"):
+            output = root.get_output_embeddings()
+            vocabulary = getattr(output, "out_features", None) or getattr(output, "num_embeddings", None)
+        if vocabulary is None:
+            vocabulary = getattr(getattr(root, "lm_head", None), "out_features", None)
+        if vocabulary is None or int(vocabulary) < 2:
+            raise RuntimeError("K-FAC probe vocabulary cannot be resolved from the pinned model")
+        return int(vocabulary)
+
+    def _build_probe_identity(self) -> dict[str, Any]:
+        vocabulary = self._vocabulary_size()
+        partitions = []
+        for start in range(0, self.input_ids.shape[0], self.micro_batch_size):
+            stop = min(start + self.micro_batch_size, self.input_ids.shape[0])
+            states = int(self.fisher_mask[start:stop].sum().item())
+            if states == 0:
+                continue
+            seed = self.probe_seed + start
+            _, identity = orthogonal_antithetic_probes(
+                states, vocabulary, pairs=self.probe_count // 2, seed=seed)
+            partitions.append({"start": start, "stop": stop, "states": states,
+                               "seed": seed, "sha256": identity["sha256"]})
+        return {
+            "algorithm": "qr_gaussian_antithetic_v2",
+            "micro_batch_size": self.micro_batch_size,
+            "probe_count": self.probe_count,
+            "pairs": self.probe_count // 2,
+            "seed": self.probe_seed,
+            "states": int(self.fisher_mask.sum().item()),
+            "vocabulary": vocabulary,
+            "partitions": partitions,
+        }
+
+    @property
+    def probe_identity(self) -> dict[str, Any]:
+        identity = getattr(self, "_probe_identity", None)
+        if identity is None:
+            identity = {
+                "algorithm": "legacy_test_fixture",
+                "seed": int(self.probe_seed),
+                "probe_count": int(self.probe_count),
+                "states": int(self.fisher_mask.sum().item()),
+            }
+        return copy.deepcopy(identity)
+
+    @property
+    def factor_storage_bytes(self) -> int:
+        return sum(a.storage_bytes + score.storage_bytes for a, score in self.factors.values())
+
+    def _unwrapped_module(self) -> torch.nn.Module:
         try:
-            with FSDP.summon_full_params(self.fsdp_module, recurse=True, writeback=False):
-                with _without_nested_fsdp_runtime_hooks(module):
-                    name_by_id = {id(parameter): name for name, parameter in module.named_parameters()}
-                    try:
-                        names = tuple(name_by_id[id(parameter)] for parameter in directions)
-                    except KeyError as error:
-                        raise RuntimeError("SOAP direction cannot be mapped to an unwrapped FSDP parameter") from error
-                    primals = tuple(parameter for parameter in directions)
-                    tangents = tuple(directions[parameter] for parameter in directions)
-                    total_weighted = torch.zeros((), device=primals[0].device, dtype=torch.float64)
-                    total_states = 0
-                    for start in range(0, self.input_ids.shape[0], self.micro_batch_size):
-                        stop = start + self.micro_batch_size
-                        ids = self.input_ids[start:stop].to(primals[0].device)
-                        attention = self.attention_mask[start:stop].to(primals[0].device)
-                        mask = self.fisher_mask[start:stop].to(primals[0].device)
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            return self.module._fsdp_wrapped_module if isinstance(self.module, FSDP) else self.module
+        except ImportError:
+            return self.module
 
-                        logits, logits_tangent = exact_logits_jvp(
-                            module,
-                            names,
-                            primals,
-                            tangents,
-                            {"input_ids": ids, "attention_mask": attention, "use_cache": False},
-                        )
-                        states = int(mask.sum().item())
-                        quadratic = categorical_fisher_quadratic(logits, logits_tangent, mask)
-                        total_weighted += quadratic.double() * states
-                        total_states += states
+    def refresh(self) -> int:
+        """Collect a complete generation while leaving model parameters/grads unchanged."""
+        from contextlib import nullcontext
+        try:
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            is_fsdp = isinstance(self.module, FSDP)
+        except ImportError:
+            is_fsdp, FSDP = False, None  # type: ignore[assignment,misc]
+        if is_fsdp and torch.distributed.get_world_size() != 1:
+            raise RuntimeError("factorized K-FAC requires one-rank legacy FSDP")
+        summon = FSDP.summon_full_params(self.module, recurse=True, writeback=False) if is_fsdp else nullcontext()
+        root = self._unwrapped_module(); was_training = root.training
+        if any(p.grad is not None for p in self.named_parameters.values()):
+            raise RuntimeError("K-FAC collection requires cleared parameter gradients")
+        modules = dict(root.named_modules()); missing = set(self.named_parameters) - set(modules)
+        if missing: raise RuntimeError(f"K-FAC module names do not resolve: {sorted(missing)}")
+        captures: dict[str, tuple[Tensor, Tensor]] = {}; handles = []
+        active_count = int(self.attention_mask.bool().sum().item())
+        response_count = int(self.fisher_mask.sum().item())
+        if active_count < 1 or response_count < 1:
+            raise RuntimeError("pinned Fisher set contains no active or response states")
+        activation_streams = {
+            p: _StreamingCovariance(p.shape[1], active_count, max_rank=self.factor_rank,
+                                    seed=self.probe_seed + 2 * offset)
+            for offset, p in enumerate(self.named_parameters.values())
+        }
+        score_streams = {
+            p: _StreamingCovariance(p.shape[0], active_count * self.probe_count,
+                                    max_rank=self.factor_rank,
+                                    seed=self.probe_seed + 2 * offset + 1)
+            for offset, p in enumerate(self.named_parameters.values())
+        }
+        # G must remain averaged by response states even though causal score
+        # rows now include every attention-active prompt/response position.
+        score_scale = math.sqrt(active_count / response_count)
+        def make_hook(name):
+            def hook(_module, args, output):
+                if not args or not isinstance(args[0], Tensor) or not isinstance(output, Tensor):
+                    raise RuntimeError(f"K-FAC module {name} did not expose tensors")
+                captures[name] = (args[0], output)
+            return hook
+        for name in self.named_parameters: handles.append(modules[name].register_forward_hook(make_hook(name)))
+        device = next(root.parameters()).device
+        context = _without_nested_fsdp_runtime_hooks(root) if is_fsdp else nullcontext()
+        try:
+            root.eval()
+            with summon, context, torch.enable_grad():
+                for start in range(0, self.input_ids.shape[0], self.micro_batch_size):
+                    stop = start + self.micro_batch_size
+                    ids = self.input_ids[start:stop].to(device); attention = self.attention_mask[start:stop].to(device)
+                    mask = self.fisher_mask[start:stop].to(device)
+                    active = self.attention_mask[start:stop].to(device).bool(); captures.clear()
+                    output = root(input_ids=ids, attention_mask=attention, use_cache=False)
+                    logits = output.logits if hasattr(output, "logits") else output
+                    if set(captures) != set(self.named_parameters):
+                        raise RuntimeError("K-FAC capture count does not match SOAP matrices")
+                    states = int(mask.sum());
+                    if not states: continue
+                    outputs = tuple(captures[n][1] for n in self.named_parameters)
+                    for name, parameter in self.named_parameters.items():
+                        activation_streams[parameter].add(captures[name][0].detach()[active])
+                    probes, _identity = orthogonal_antithetic_probes(
+                        states, logits.shape[-1], pairs=self.probe_count // 2,
+                        seed=self.probe_seed + start, device=device, dtype=torch.float32)
+                    probes = probes * math.sqrt(states * logits.shape[-1])
+                    probabilities = logits.detach().float()[mask].softmax(-1); rootp = probabilities.sqrt()
+                    for index, probe in enumerate(probes):
+                        grad_selected = rootp * probe - probabilities * (rootp * probe).sum(-1, keepdim=True)
+                        grad_logits = torch.zeros_like(logits); grad_logits[mask] = grad_selected.to(logits.dtype)
+                        gradients = torch.autograd.grad(logits, outputs, grad_outputs=grad_logits,
+                                                        retain_graph=index + 1 < len(probes))
+                        for (_name, parameter), gradient in zip(self.named_parameters.items(), gradients, strict=True):
+                            score_streams[parameter].add(gradient.detach()[active], scale=score_scale)
         finally:
-            module.train(was_training)
-        if total_states == 0:
-            raise RuntimeError("pinned Fisher set contains no teacher-forced states")
-        result = float((total_weighted / total_states).item())
-        if not math.isfinite(result):
-            raise FloatingPointError("aggregated exact Fisher quadratic is non-finite")
-        return result
+            for handle in handles: handle.remove()
+            root.train(was_training)
+        factors = {}
+        for parameter in self.named_parameters.values():
+            factors[parameter] = (activation_streams[parameter].finalize(),
+                                  score_streams[parameter].finalize())
+        if any(p.grad is not None for p in self.named_parameters.values()):
+            raise RuntimeError("K-FAC collection contaminated PPO gradients")
+        self.factors = factors; self.factor_count = len(factors); self.factor_generation += 1
+        return self.factor_generation
+
+    def __call__(self, directions: Mapping[Tensor, Tensor], *, generation: int | None = None) -> float:
+        expected = self.factor_generation if generation is None else generation
+        if expected != self.factor_generation or expected < 1:
+            raise RuntimeError("K-FAC factor generation is missing or stale")
+        if len(directions) != self.factor_count or set(directions) != set(self.factors):
+            raise RuntimeError("K-FAC direction count/ownership does not match factors")
+        total = 0.0
+        for parameter, direction in directions.items():
+            activation, score = self.factors[parameter]
+            if isinstance(activation, Tensor):  # compatibility for dense toy/reference factors
+                total += float(kfac_quadratic(direction, activation, score).item())
+            else:
+                total += _row_factor_quadratic(direction, activation, score)
+        if not math.isfinite(total) or total <= 0: raise FloatingPointError("K-FAC quadratic must be finite and positive")
+        return float(total)
+
+    def state_dict(self) -> dict[str, Any]:
+        by_name = {}
+        for name, parameter in self.named_parameters.items():
+            if parameter in self.factors:
+                a, g = self.factors[parameter]
+                by_name[name] = {"activation": a.state_dict(), "score": g.state_dict()}
+        return {"version": 2, "probe_identity": self.probe_identity,
+                "factor_generation": self.factor_generation,
+                "factor_count": self.factor_count, "factors": by_name}
+
+    def validate_state_dict(self, state: Mapping[str, Any]):
+        if state.get("version") != 2 or state.get("probe_identity") != self.probe_identity:
+            raise RuntimeError("score-Fisher checkpoint probe definition mismatch")
+        try:
+            generation = int(state["factor_generation"])
+            factor_count = int(state["factor_count"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("score-Fisher checkpoint generation/count is invalid") from error
+        values = state.get("factors")
+        if not isinstance(values, Mapping) or set(values) != set(self.named_parameters):
+            raise RuntimeError("score-Fisher checkpoint factor ownership mismatch")
+        if generation < 1 or factor_count != len(values) or factor_count != len(self.named_parameters):
+            raise RuntimeError("score-Fisher checkpoint factor generation/count mismatch")
+
+        restored = {}
+        for name, parameter in self.named_parameters.items():
+            pair = values[name]
+            if not isinstance(pair, Mapping) or set(pair) != {"activation", "score"}:
+                raise RuntimeError("score-Fisher checkpoint factor payload mismatch")
+            loaded = []
+            for kind, dimension in (("activation", parameter.shape[1]), ("score", parameter.shape[0])):
+                payload = pair[kind]
+                if not isinstance(payload, Mapping) or set(payload) != {"rows", "dimension", "representation"}:
+                    raise RuntimeError("score-Fisher checkpoint factor payload mismatch")
+                rows = payload["rows"]
+                if (not isinstance(rows, Tensor) or rows.ndim != 2 or rows.device.type != "cpu"
+                        or rows.dtype != torch.float32 or not torch.isfinite(rows).all()):
+                    raise RuntimeError("score-Fisher checkpoint factor rows must be finite CPU fp32")
+                if (int(payload["dimension"]) != dimension or rows.shape[1] != dimension
+                        or not 1 <= rows.shape[0] <= self.factor_rank
+                        or payload["representation"] not in ("empirical", "sketch")):
+                    raise RuntimeError("score-Fisher checkpoint factor dimension/rank mismatch")
+                loaded.append(CovarianceFactor(rows.clone().contiguous(), dimension,
+                                               str(payload["representation"])))
+            restored[parameter] = (loaded[0], loaded[1])
+        return restored, generation, factor_count
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        restored, generation, factor_count = self.validate_state_dict(state)
+        self.factors = restored
+        self.factor_count = factor_count
+        self.factor_generation = generation

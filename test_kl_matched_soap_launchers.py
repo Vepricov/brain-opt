@@ -16,6 +16,16 @@ def test_production_launcher_has_exact_seed_step_validation_and_checkpoint_contr
     assert "for seed in 0 1 2" in campaign
     assert "critic.optim.optimizer=AdamW" in runner
     assert "critic.optim.optimizer_impl=torch.optim" in runner
+    assert "ACTOR_OPTIMIZER=KLMatchedSOAP" in runner
+    assert "ACTOR_OPTIMIZER_IMPL=verl.utils.kl_matched_soap" in runner
+    assert "fisher_probe_count: $FISHER_PROBE_COUNT" in runner
+    assert "fisher_probe_seed: $FISHER_PROBE_SEED" in runner
+    assert "ExactLogitsJVPFisher" not in (
+        ROOT / "vendor/verl/verl/utils/kl_matched_soap.py"
+    ).read_text()
+    assert "torch.func" not in (
+        ROOT / "vendor/verl/verl/utils/kl_matched_soap.py"
+    ).read_text()
     assert "nvmlDeviceGetHandleByUUID" in runner
     assert "physical_device_id.startswith(\"GPU-\")" in runner
     assert (

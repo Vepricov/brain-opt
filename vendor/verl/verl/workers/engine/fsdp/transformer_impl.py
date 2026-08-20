@@ -212,13 +212,13 @@ class FSDPEngine(BaseEngine):
         log_gpu_memory_usage("After offload model/optimizer/grad during init", logger=logger)
 
     def _bind_kl_matched_fisher(self):
-        """Bind the pinned exact-logits-JVP Fisher to KL-matched actor optimizers."""
-        from verl.utils.kl_matched_soap import ExactLogitsJVPFisher, build_teacher_forced_gsm8k
+        """Bind pinned teacher-forced policy-score K-FAC factors to KL-matched SOAP."""
+        from verl.utils.kl_matched_soap import FactorizedKFACFisher, build_teacher_forced_gsm8k
 
         if not isinstance(self.module, FSDP):
             raise RuntimeError("KLMatchedSOAP requires legacy FSDP, not FSDP2")
         if torch.distributed.get_world_size() != 1 or not self.engine_config.use_orig_params:
-            raise RuntimeError("KLMatchedSOAP exact JVP requires one-rank FSDP with use_orig_params=True")
+            raise RuntimeError("KLMatchedSOAP K-FAC requires one-rank FSDP with use_orig_params=True")
         if not self.optimizer.fisher_dataset_path:
             raise RuntimeError("KLMatchedSOAP requires fisher_dataset_path")
         processor = self.model_config.get_processor()
@@ -228,12 +228,32 @@ class FSDPEngine(BaseEngine):
             tokenizer,
             self.optimizer.fisher_prompt_indices,
         )
-        evaluator = ExactLogitsJVPFisher(
+        root = self.module._fsdp_wrapped_module
+        parameter_names = {id(parameter): name for name, parameter in root.named_parameters()}
+        owned_modules = {}
+        soap_group = next((group for group in self.optimizer.param_groups if group.get("route") == "soap_matrix"), None)
+        if soap_group is None:
+            raise RuntimeError("KLMatchedSOAP has no SOAP matrix parameter group")
+        for parameter in soap_group["params"]:
+            name = parameter_names.get(id(parameter))
+            if name is None or not name.endswith(".weight"):
+                raise RuntimeError("SOAP matrix cannot be mapped to a linear module for K-FAC")
+            module_name = name.removesuffix(".weight")
+            target = dict(root.named_modules()).get(module_name)
+            if not isinstance(target, torch.nn.Linear) or target.weight is not parameter:
+                raise RuntimeError(f"SOAP matrix {name} is not owned by a linear module")
+            owned_modules[module_name] = parameter
+        evaluator = FactorizedKFACFisher(
             self.module,
             input_ids,
             attention_mask,
             fisher_mask,
+            owned_modules,
             micro_batch_size=self.optimizer.fisher_micro_batch_size,
+            probe_count=self.optimizer.fisher_probe_count,
+            probe_seed=self.optimizer.fisher_probe_seed,
+            factor_rank=self.optimizer.fisher_factor_rank,
+            dense_threshold=self.optimizer.fisher_dense_threshold,
         )
         self.optimizer.bind_fisher_evaluator(evaluator, identity)
 
