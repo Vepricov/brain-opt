@@ -91,7 +91,7 @@ def exact_logits_jvp(
     # Flash/efficient SDPA kernels in torch 2.6 do not implement forward-mode
     # AD.  The math kernel is algebraically equivalent and does, so constrain
     # only this Fisher JVP rather than changing the PPO model's normal forwards.
-    with sdpa_kernel(SDPBackend.MATH):
+    with torch.no_grad(), sdpa_kernel(SDPBackend.MATH):
         return cast(
             tuple[Tensor, Tensor],
             jvp(
@@ -156,10 +156,10 @@ def matched_alpha(
 @dataclass(frozen=True)
 class UpdateProposal:
     generation: int
-    adamw_directions: Mapping[Tensor, Tensor]
-    soap_directions: Mapping[Tensor, Tensor]
-    auxiliary_directions: Mapping[Tensor, Tensor]
-    next_states: Mapping[Tensor, Mapping[str, Any]]
+    adamw_directions: dict[Tensor, Tensor]
+    soap_directions: dict[Tensor, Tensor]
+    auxiliary_directions: dict[Tensor, Tensor]
+    next_states: dict[Tensor, dict[str, Any]]
 
 
 def _clone_state(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -430,8 +430,17 @@ class KLMatchedSOAP(Optimizer):
         if self._fisher_evaluator is None or self._prompt_identity is None:
             raise RuntimeError("FSDPEngine did not bind the exact Fisher evaluator")
         proposal = self.propose()
+        # Proposal construction has consumed the already-clipped gradients.  Do
+        # not retain another full actor-sized tensor set while the functional
+        # JVP creates its dual parameters.
+        for group in self.param_groups:
+            for parameter in group["params"]:
+                parameter.grad = None
         with torch.enable_grad():
             q_adamw = float(self._fisher_evaluator(proposal.adamw_directions))
+            # The AdamW shadow direction is needed only for its Fisher scalar;
+            # commit applies the SOAP direction and advances both shadow states.
+            proposal.adamw_directions.clear()
             q_soap = float(self._fisher_evaluator(proposal.soap_directions))
         alpha, raw_alpha = matched_alpha(
             q_adamw,

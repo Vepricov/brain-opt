@@ -93,6 +93,8 @@ def test_functional_forward_mode_logits_jvp_is_exact_and_nonmutating():
 
     assert torch.equal(logits, inputs @ module.weight.T)
     assert torch.equal(tangent, inputs @ direction.T)
+    assert not logits.requires_grad
+    assert not tangent.requires_grad
     assert torch.equal(module.weight, weight_before)
 
 
@@ -246,6 +248,7 @@ def test_step_checkpoint_restore_preserves_shadow_soap_alpha_and_prompt_identity
     for index, (_, parameter) in enumerate(named):
         parameter.grad = torch.full_like(parameter, 0.1 + index * 0.05)
     optimizer.step()
+    assert all(parameter.grad is None for _, parameter in named)
     checkpoint = copy.deepcopy(optimizer.state_dict())
 
     restored_named = [(name, torch.nn.Parameter(parameter.detach().clone())) for name, parameter in named]
