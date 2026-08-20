@@ -138,6 +138,73 @@ def test_exact_logits_jvp_fisher_runs_through_real_one_rank_fsdp_on_cpu():
             os.remove(rendezvous)
 
 
+def test_exact_logits_jvp_fisher_runs_through_nested_one_rank_fsdp_on_cpu(monkeypatch):
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+    class ToyCausalLM(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.self_attn = torch.nn.Linear(2, 3, bias=False)
+
+        def forward(self, input_ids, attention_mask, use_cache):
+            del attention_mask, use_cache
+            values = torch.nn.functional.one_hot(input_ids, num_classes=2).float()
+            return SimpleNamespace(logits=self.self_attn(values))
+
+    descriptor, rendezvous = tempfile.mkstemp(prefix="kl-matched-soap-nested-fsdp-")
+    os.close(descriptor)
+    owns_group = not torch.distributed.is_initialized()
+    try:
+        if owns_group:
+            torch.distributed.init_process_group("gloo", init_method=f"file://{rendezvous}", rank=0, world_size=1)
+        model = ToyCausalLM()
+        with torch.no_grad():
+            model.self_attn.weight.copy_(torch.tensor([[1.0, -0.5], [0.2, 0.7], [-0.3, 0.4]]))
+        model.self_attn = FSDP(model.self_attn, use_orig_params=True, device_id=torch.device("cpu"))
+        nested_fsdp = model.self_attn
+        nested_unwrapped = nested_fsdp._fsdp_wrapped_module
+        wrapped = FSDP(model, use_orig_params=True, device_id=torch.device("cpu"))
+        parameter = next(wrapped.parameters())
+        parameter_before = parameter.detach().clone()
+        module_tree_before = tuple((name, id(child)) for name, child in wrapped.named_modules())
+        direction = torch.tensor([[0.1, 0.2], [-0.4, 0.3], [0.5, -0.6]])
+        inputs = torch.tensor([[0, 1]])
+        mask = torch.tensor([[True, True]])
+        evaluator = ExactLogitsJVPFisher(wrapped, inputs, torch.ones_like(inputs), mask)
+        observed_jvps = []
+
+        def record_exact_jvp(*args, **kwargs):
+            result = exact_logits_jvp(*args, **kwargs)
+            observed_jvps.append(result[1])
+            return result
+
+        monkeypatch.setattr(kl_matched_soap, "exact_logits_jvp", record_exact_jvp)
+
+        failing_evaluator = ExactLogitsJVPFisher(wrapped, inputs, torch.ones_like(inputs), mask[:, :1])
+        with pytest.raises(ValueError, match="Fisher mask"):
+            failing_evaluator({parameter: direction})
+        assert wrapped._fsdp_wrapped_module.self_attn is nested_fsdp
+        assert nested_fsdp._fsdp_wrapped_module is nested_unwrapped
+        assert tuple((name, id(child)) for name, child in wrapped.named_modules()) == module_tree_before
+
+        actual = evaluator({parameter: direction})
+
+        with FSDP.summon_full_params(wrapped, recurse=True, writeback=False):
+            logits = wrapped(input_ids=inputs, attention_mask=torch.ones_like(inputs), use_cache=False).logits
+        tangent = torch.nn.functional.one_hot(inputs, num_classes=2).float() @ direction.T
+        expected = categorical_fisher_quadratic(logits, tangent, mask).item()
+        assert torch.equal(observed_jvps[-1], tangent)
+        assert actual == pytest.approx(expected, rel=1e-6)
+        assert torch.equal(parameter, parameter_before)
+        assert wrapped._fsdp_wrapped_module.self_attn is nested_fsdp
+        assert tuple((name, id(child)) for name, child in wrapped.named_modules()) == module_tree_before
+    finally:
+        if owns_group and torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        if os.path.exists(rendezvous):
+            os.remove(rendezvous)
+
+
 def test_proposal_does_not_mutate_parameters_gradients_or_live_optimizer_state():
     optimizer, named = _optimizer()
     for index, (_, parameter) in enumerate(named):

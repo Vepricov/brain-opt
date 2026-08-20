@@ -24,9 +24,10 @@ import copy
 import hashlib
 import json
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence, cast
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence, cast
 
 import torch
 from torch import Tensor
@@ -73,11 +74,8 @@ def exact_logits_jvp(
 ) -> tuple[Tensor, Tensor]:
     """Evaluate a model and its exact logits JVP functionally.
 
-    Legacy nested FSDP reshard hooks rebind parameter ``.data`` after forward.
-    ``torch.func.jvp`` rejects that operation because it wraps the entire model
-    in a functorch transform.  ``torch.autograd.functional.jvp`` computes the
-    same exact directional derivative without imposing that incompatible
-    transform on FSDP runtime hooks.
+    The caller must ensure that the module tree has no active FSDP wrappers:
+    functional parameter replacement is incompatible with their runtime hooks.
     """
     from torch.func import functional_call
 
@@ -99,6 +97,33 @@ def exact_logits_jvp(
             strict=True,
         ),
     )
+
+
+@contextmanager
+def _without_nested_fsdp_runtime_hooks(module: torch.nn.Module) -> Iterator[None]:
+    """Temporarily expose wrapped child modules beneath an unwrapped FSDP root."""
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+    substitutions: list[tuple[torch.nn.Module, str, torch.nn.Module]] = []
+
+    def unwrap_children(parent: torch.nn.Module) -> None:
+        for name, child in tuple(parent._modules.items()):
+            if child is None:
+                continue
+            if isinstance(child, FSDP):
+                substitutions.append((parent, name, child))
+                unwrapped = child._fsdp_wrapped_module
+                parent._modules[name] = unwrapped
+                unwrap_children(unwrapped)
+            else:
+                unwrap_children(child)
+
+    try:
+        unwrap_children(module)
+        yield
+    finally:
+        for parent, name, fsdp_child in reversed(substitutions):
+            parent._modules[name] = fsdp_child
 
 
 def matched_alpha(
@@ -542,36 +567,37 @@ class ExactLogitsJVPFisher:
         if torch.distributed.get_world_size() != 1:
             raise RuntimeError("exact Fisher logits-JVP currently requires one-rank FSDP")
         module = self.fsdp_module._fsdp_wrapped_module
-        name_by_id = {id(parameter): name for name, parameter in module.named_parameters()}
-        try:
-            names = tuple(name_by_id[id(parameter)] for parameter in directions)
-        except KeyError as error:
-            raise RuntimeError("SOAP direction cannot be mapped to an unwrapped FSDP parameter") from error
-        primals = tuple(parameter for parameter in directions)
-        tangents = tuple(directions[parameter] for parameter in directions)
-        total_weighted = torch.zeros((), device=primals[0].device, dtype=torch.float64)
-        total_states = 0
         was_training = module.training
         module.eval()
         try:
             with FSDP.summon_full_params(self.fsdp_module, recurse=True, writeback=False):
-                for start in range(0, self.input_ids.shape[0], self.micro_batch_size):
-                    stop = start + self.micro_batch_size
-                    ids = self.input_ids[start:stop].to(primals[0].device)
-                    attention = self.attention_mask[start:stop].to(primals[0].device)
-                    mask = self.fisher_mask[start:stop].to(primals[0].device)
+                with _without_nested_fsdp_runtime_hooks(module):
+                    name_by_id = {id(parameter): name for name, parameter in module.named_parameters()}
+                    try:
+                        names = tuple(name_by_id[id(parameter)] for parameter in directions)
+                    except KeyError as error:
+                        raise RuntimeError("SOAP direction cannot be mapped to an unwrapped FSDP parameter") from error
+                    primals = tuple(parameter for parameter in directions)
+                    tangents = tuple(directions[parameter] for parameter in directions)
+                    total_weighted = torch.zeros((), device=primals[0].device, dtype=torch.float64)
+                    total_states = 0
+                    for start in range(0, self.input_ids.shape[0], self.micro_batch_size):
+                        stop = start + self.micro_batch_size
+                        ids = self.input_ids[start:stop].to(primals[0].device)
+                        attention = self.attention_mask[start:stop].to(primals[0].device)
+                        mask = self.fisher_mask[start:stop].to(primals[0].device)
 
-                    logits, logits_tangent = exact_logits_jvp(
-                        module,
-                        names,
-                        primals,
-                        tangents,
-                        {"input_ids": ids, "attention_mask": attention, "use_cache": False},
-                    )
-                    states = int(mask.sum().item())
-                    quadratic = categorical_fisher_quadratic(logits, logits_tangent, mask)
-                    total_weighted += quadratic.double() * states
-                    total_states += states
+                        logits, logits_tangent = exact_logits_jvp(
+                            module,
+                            names,
+                            primals,
+                            tangents,
+                            {"input_ids": ids, "attention_mask": attention, "use_cache": False},
+                        )
+                        states = int(mask.sum().item())
+                        quadratic = categorical_fisher_quadratic(logits, logits_tangent, mask)
+                        total_weighted += quadratic.double() * states
+                        total_states += states
         finally:
             module.train(was_training)
         if total_states == 0:
