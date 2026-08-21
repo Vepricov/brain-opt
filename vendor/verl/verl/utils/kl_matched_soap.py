@@ -326,21 +326,80 @@ def _project(matrix: Tensor, left: Tensor | None, right: Tensor | None) -> Tenso
     return result
 
 
-def _project_back(matrix: Tensor, left: Tensor | None, right: Tensor | None) -> Tensor:
-    result = matrix
-    if left is not None:
-        result = left @ result
-    if right is not None:
-        result = result @ right.T
-    return result
+def _symmetric_inverse_quarter(factor: Tensor, *, damping: float) -> Tensor:
+    """Return ``(factor + damping I)^(-1/4)`` for a finite PSD factor."""
+    if factor.ndim != 2 or factor.shape[0] != factor.shape[1]:
+        raise ValueError("SOAP factor must be square")
+    if not math.isfinite(damping) or damping < 0 or not torch.isfinite(factor).all():
+        raise FloatingPointError("SOAP factor and damping must be finite and damping non-negative")
+    work = factor
+    eigenvalues, eigenvectors = torch.linalg.eigh(work)
+    shifted = eigenvalues + damping
+    if torch.any(shifted <= 0) or not torch.isfinite(shifted).all():
+        raise FloatingPointError("damped SOAP factor must be positive definite")
+    return (eigenvectors * shifted.pow(-0.25).unsqueeze(0)) @ eigenvectors.T
 
 
-class KLMatchedSOAP(Optimizer):
-    """SOAP actor matrices with per-update factorized score-Fisher matching."""
+def factorized_soap_polar_direction(
+    gradient: Tensor,
+    left_factor: Tensor,
+    right_factor: Tensor,
+    *,
+    damping: float,
+) -> Tensor:
+    """Compute the factorized SOAP-polar MaxOp LMO direction.
+
+    ``M=L^-1/4 G R^-1/4``, ``Z=-UV^T`` for the thin SVD of M, and
+    ``D=L^-1/4 Z R^-1/4``.
+    """
+    if gradient.ndim != 2:
+        raise ValueError("SOAP-polar gradient must be a matrix")
+    if left_factor.shape != (gradient.shape[0], gradient.shape[0]):
+        raise ValueError("left SOAP factor does not match gradient")
+    if right_factor.shape != (gradient.shape[1], gradient.shape[1]):
+        raise ValueError("right SOAP factor does not match gradient")
+    work = gradient.float() if gradient.dtype in (torch.float16, torch.bfloat16) else gradient
+    left = _symmetric_inverse_quarter(left_factor.to(work), damping=damping)
+    right = _symmetric_inverse_quarter(right_factor.to(work), damping=damping)
+    whitened = left @ work @ right
+    if not torch.isfinite(whitened).all():
+        raise FloatingPointError("SOAP-polar whitened gradient is non-finite")
+    u, _singular_values, vh = torch.linalg.svd(whitened, full_matrices=False)
+    return (left @ (-u @ vh) @ right).to(gradient.dtype)
+
+
+def _soap_polar_direction_with_optional_factors(
+    gradient: Tensor,
+    left_factor: Tensor | None,
+    right_factor: Tensor | None,
+    *,
+    damping: float,
+) -> Tensor:
+    """Apply identity whitening on dimensions omitted by the SOAP size cap."""
+    left = (
+        _symmetric_inverse_quarter(left_factor, damping=damping)
+        if left_factor is not None
+        else torch.eye(gradient.shape[0], device=gradient.device, dtype=gradient.dtype)
+    )
+    right = (
+        _symmetric_inverse_quarter(right_factor, damping=damping)
+        if right_factor is not None
+        else torch.eye(gradient.shape[1], device=gradient.device, dtype=gradient.dtype)
+    )
+    whitened = left @ gradient @ right
+    if not torch.isfinite(whitened).all():
+        raise FloatingPointError("SOAP-polar whitened gradient is non-finite")
+    u, _singular_values, vh = torch.linalg.svd(whitened, full_matrices=False)
+    return left @ (-u @ vh) @ right
+
+
+class KLMatchedSOAPPolarLMO(Optimizer):
+    """Factorized SOAP-polar MaxOp LMO with score-Fisher KL matching."""
 
     requires_named_parameters = True
     requires_kl_matched_fisher = True
-    route_label = "causal_per_update_kl_matched_soap"
+    route_label = "causal_kl_matched_factorized_soap_polar_maxop_lmo"
+    optimizer_identity = "factorized_soap_polar_maxop_lmo_v1"
 
     def __init__(
         self,
@@ -354,6 +413,7 @@ class KLMatchedSOAP(Optimizer):
         soap_shampoo_beta: float = -1.0,
         soap_precondition_frequency: int = 10,
         soap_max_precond_dim: int = 2048,
+        matrix_direction: str = "factorized_soap_polar_maxop_lmo_v1",
         auxiliary_eps: float | None = None,
         alpha_min: float = 0.05,
         alpha_max: float = 20.0,
@@ -385,6 +445,10 @@ class KLMatchedSOAP(Optimizer):
             raise ValueError("SOAP and Fisher dimensions/counts must be positive")
         if fisher_probe_count < 2 or fisher_probe_count % 2:
             raise ValueError("Fisher probes must contain deterministic antithetic pairs")
+        if matrix_direction != self.optimizer_identity:
+            raise ValueError(
+                f"matrix_direction must be the fail-closed identity {self.optimizer_identity!r}"
+            )
         matched_alpha(1.0, 1.0, minimum=alpha_min, maximum=alpha_max, clamp=alpha_clamp)
 
         defaults = {"lr": lr, "weight_decay": weight_decay}
@@ -419,6 +483,7 @@ class KLMatchedSOAP(Optimizer):
         self.shampoo_beta = float(soap_shampoo_beta if soap_shampoo_beta >= 0 else soap_betas[1])
         self.precondition_frequency = int(soap_precondition_frequency)
         self.max_precond_dim = int(soap_max_precond_dim)
+        self.matrix_direction = matrix_direction
         self.alpha_min = float(alpha_min)
         self.alpha_max = float(alpha_max)
         self.alpha_clamp = bool(alpha_clamp)
@@ -518,14 +583,17 @@ class KLMatchedSOAP(Optimizer):
             .mul(second)
             .addcmul(projected, projected, value=1 - second)
         )
-        normalized = _project(exp_avg, left, right) / (1 - first**step)
-        denominator = (exp_avg_sq / (1 - second**step)).sqrt().add(self.soap_eps)
-        preconditioned = _project_back(normalized / denominator, left, right)
+        # Keep the temporal SOAP moments and basis refreshes resumable, but use
+        # the current temporal Shampoo factors for the MaxOp polar LMO.
+        polar_direction = _soap_polar_direction_with_optional_factors(
+            work_gradient, gg_left, gg_right, damping=self.soap_eps
+        )
         group = self._group_for(parameter)
-        direction = -group["lr"] * preconditioned - group["lr"] * group["weight_decay"] * parameter.float()
+        direction = group["lr"] * polar_direction - group["lr"] * group["weight_decay"] * parameter.float()
 
-        # The current direction uses the prior basis (or its deterministic first-step
-        # initialization). A scheduled refresh is stored for the next update only.
+        # The polar direction uses current factors directly. Preserve scheduled
+        # SOAP basis refreshes as resumable temporal state for diagnostics and
+        # compatibility with the existing factor-update lifecycle.
         if step % self.precondition_frequency == 0:
             old_left, old_right = left, right
             if gg_left is not None:
@@ -668,7 +736,8 @@ class KLMatchedSOAP(Optimizer):
     def state_dict(self):
         result = super().state_dict()
         result["kl_matched_soap"] = {
-            "version": 2,
+            "version": 3,
+            "optimizer_identity": self.optimizer_identity,
             "update_generation": self._update_generation,
             "prompt_identity": copy.deepcopy(self._prompt_identity),
             "latest_telemetry": dict(self.latest_telemetry),
@@ -682,6 +751,7 @@ class KLMatchedSOAP(Optimizer):
 
     def _checkpoint_configuration(self) -> dict[str, Any]:
         return {
+            "matrix_direction": self.matrix_direction,
             "adamw_betas": self.adamw_betas,
             "adamw_eps": self.adamw_eps,
             "auxiliary_eps": self.auxiliary_eps,
@@ -706,8 +776,10 @@ class KLMatchedSOAP(Optimizer):
     def load_state_dict(self, state_dict):
         state_dict = dict(state_dict)
         metadata = state_dict.pop("kl_matched_soap", None)
-        if not isinstance(metadata, Mapping) or metadata.get("version") != 2:
+        if not isinstance(metadata, Mapping) or metadata.get("version") != 3:
             raise RuntimeError("KLMatchedSOAP checkpoint is missing causal proposal metadata")
+        if metadata.get("optimizer_identity") != self.optimizer_identity:
+            raise RuntimeError("checkpoint optimizer identity is not factorized SOAP-polar MaxOp LMO")
         restored_identity = metadata.get("prompt_identity")
         if self._prompt_identity is None or restored_identity != self._prompt_identity:
             raise RuntimeError("checkpoint pinned Fisher prompt identity does not match this run")
@@ -742,6 +814,11 @@ class KLMatchedSOAP(Optimizer):
         self._factor_generation = factor_generation
         self._factor_count = factor_count
         self.latest_telemetry = dict(metadata.get("latest_telemetry", {}))
+
+
+# Source compatibility for older imports. Checkpoint metadata remains
+# fail-closed on the explicit SOAP-polar optimizer identity.
+KLMatchedSOAP = KLMatchedSOAPPolarLMO
 
 
 def build_teacher_forced_gsm8k(

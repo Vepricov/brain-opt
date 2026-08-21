@@ -20,13 +20,75 @@ kl_matched_soap = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = kl_matched_soap
 SPEC.loader.exec_module(kl_matched_soap)
 KLMatchedSOAP = kl_matched_soap.KLMatchedSOAP
+KLMatchedSOAPPolarLMO = kl_matched_soap.KLMatchedSOAPPolarLMO
 FactorizedKFACFisher = kl_matched_soap.FactorizedKFACFisher
 FactorizedScoreFisher = kl_matched_soap.FactorizedScoreFisher
 CovarianceFactor = kl_matched_soap.CovarianceFactor
 orthogonal_antithetic_probes = kl_matched_soap.orthogonal_antithetic_probes
 kfac_quadratic = kl_matched_soap.kfac_quadratic
 matched_alpha = kl_matched_soap.matched_alpha
+factorized_soap_polar_direction = kl_matched_soap.factorized_soap_polar_direction
 partition_actor_parameters = kl_matched_soap.partition_actor_parameters
+
+
+def test_factorized_soap_polar_direction_matches_analytic_diagonal_factors():
+    gradient = torch.tensor([[3.0, 4.0], [0.0, 2.0]], dtype=torch.float64)
+    left = torch.diag(torch.tensor([16.0, 1.0], dtype=torch.float64))
+    right = torch.diag(torch.tensor([1.0, 81.0], dtype=torch.float64))
+    left_inverse_quarter = torch.diag(torch.tensor([0.5, 1.0], dtype=torch.float64))
+    right_inverse_quarter = torch.diag(torch.tensor([1.0, 1.0 / 3.0], dtype=torch.float64))
+    whitened = left_inverse_quarter @ gradient @ right_inverse_quarter
+    u, _, vh = torch.linalg.svd(whitened, full_matrices=False)
+    expected = left_inverse_quarter @ (-u @ vh) @ right_inverse_quarter
+
+    actual = factorized_soap_polar_direction(gradient, left, right, damping=0.0)
+
+    assert torch.allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_optimizer_proposes_polar_lmo_and_records_fail_closed_identity_without_live_mutation():
+    matrix = torch.nn.Parameter(torch.tensor([[1.0, -2.0], [0.5, 3.0]]))
+    auxiliary = torch.nn.Parameter(torch.tensor([1.0, -1.0]))
+    optimizer = KLMatchedSOAPPolarLMO(
+        [("layers.0.self_attn.weight", matrix), ("layers.0.input_layernorm.weight", auxiliary)],
+        lr=0.01,
+        weight_decay=0.1,
+        soap_shampoo_beta=0.0,
+        soap_eps=0.25,
+        soap_max_precond_dim=8,
+        fisher_prompt_indices=range(16),
+    )
+    gradient = torch.tensor([[3.0, 1.0], [1.0, 2.0]])
+    matrix.grad = gradient.clone()
+    auxiliary.grad = torch.tensor([0.25, -0.5])
+    parameters_before = (matrix.detach().clone(), auxiliary.detach().clone())
+    live_state_before = copy.deepcopy(optimizer.state_dict())
+
+    proposal = optimizer.propose()
+
+    temporal_left = gradient @ gradient.T
+    temporal_right = gradient.T @ gradient
+    expected = 0.01 * factorized_soap_polar_direction(
+        gradient, temporal_left, temporal_right, damping=0.25
+    ) - 0.01 * 0.1 * parameters_before[0]
+    assert torch.allclose(proposal.soap_directions[matrix], expected, rtol=1e-5, atol=1e-7)
+    assert torch.equal(matrix, parameters_before[0])
+    assert torch.equal(auxiliary, parameters_before[1])
+    _assert_nested_equal(optimizer.state_dict(), live_state_before)
+    assert "soap_gg_left" in proposal.next_states[matrix]
+    assert "soap_gg_right" in proposal.next_states[matrix]
+    metadata = optimizer.state_dict()["kl_matched_soap"]
+    assert metadata["optimizer_identity"] == "factorized_soap_polar_maxop_lmo_v1"
+    assert metadata["configuration"]["matrix_direction"] == "factorized_soap_polar_maxop_lmo_v1"
+    with pytest.raises(ValueError, match="matrix_direction"):
+        KLMatchedSOAPPolarLMO(
+            [("layers.0.self_attn.weight", matrix), ("layers.0.input_layernorm.weight", auxiliary)],
+            lr=0.01,
+            weight_decay=0.0,
+            matrix_direction="legacy_soap_adam_direction",
+            soap_max_precond_dim=8,
+            fisher_prompt_indices=range(16),
+        )
 
 
 def _named_parameters():
@@ -297,6 +359,16 @@ def test_actor_auxiliary_update_is_exact_adamw_and_is_not_alpha_scaled():
     optimizer.commit(proposal, alpha=7.0)
     reference_optimizer.step()
     assert torch.allclose(auxiliary, reference, rtol=1e-6, atol=1e-7)
+
+
+def test_restore_fails_closed_when_optimizer_identity_changes_without_mutating_state():
+    optimizer, _ = _optimizer()
+    checkpoint = copy.deepcopy(optimizer.state_dict())
+    checkpoint["kl_matched_soap"]["optimizer_identity"] = "legacy_soap_adam_direction"
+    before = copy.deepcopy(optimizer.state_dict())
+    with pytest.raises(RuntimeError, match="optimizer identity"):
+        optimizer.load_state_dict(checkpoint)
+    _assert_nested_equal(optimizer.state_dict(), before)
 
 
 def test_restore_fails_closed_when_pinned_prompt_identity_changes():
