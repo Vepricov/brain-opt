@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brain_opt"
-version = "0.1.0"
-description = "BrainLab optimizer collection: drop-in replacements for torch.optim with SGD, AdamW, SignSGD, Lion, Muon (D-Muon), Shampoo, SOAP."
+version = "0.3.0"
+description = "BrainLab optimizers, federated simulators and parameter-efficient language model training."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "BrainLab" }
 ]
-keywords = ["pytorch", "optimizer", "muon", "shampoo", "soap", "lion", "deep-learning"]
+keywords = ["pytorch", "optimizer", "federated-learning", "fedavg", "muon", "shampoo", "soap", "lion", "deep-learning"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -33,11 +33,18 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+training = ["torch>=2.1", "transformers>=4.43", "peft>=0.11", "accelerate>=0.30"]
+
+[project.scripts]
+brain-opt = "brain_opt.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/brainlab/brain_opt"
+Homepage = "https://github.com/Vepricov/brain-opt"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["brain_opt*"]
 exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+markers = ["platform_mock: contract checks with mocked PlatformAPI, not a live platform run"]

@@ -137,6 +137,10 @@ class Muon(Optimizer):
         A, B = shape[0], shape[1]
         return lr * 0.2 * math.sqrt(max(A, B))
 
+    def _direction(self, p: torch.Tensor, g_update: torch.Tensor, ns_steps: int) -> torch.Tensor:
+        """Update direction for a Muon-managed 2-D momentum; subclasses override."""
+        return _zeropower_via_newtonschulz5(g_update, steps=ns_steps)
+
     @torch.no_grad()
     def step(self, closure: Optional[callable] = None):  # type: ignore[override]
         loss = None
@@ -169,7 +173,7 @@ class Muon(Optimizer):
                 buf = state["momentum_buffer"]
                 buf.mul_(momentum).add_(g)
                 g_update = g.add(buf, alpha=momentum) if nesterov else buf
-                u = _zeropower_via_newtonschulz5(g_update, steps=ns_steps).to(p.dtype)
+                u = self._direction(p, g_update, ns_steps).to(p.dtype)
                 if u.shape != original_shape:
                     u = u.view(original_shape)
 

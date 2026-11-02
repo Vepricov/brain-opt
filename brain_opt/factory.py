@@ -19,6 +19,7 @@ from .muon import Muon
 from .shampoo import Shampoo
 from .sign_sgd import SignSGD
 from .soap import SOAP
+from .softsign import SoftMuon, SoftSignum
 
 _Params = Union[Iterable[torch.Tensor], Iterable[dict]]
 
@@ -31,6 +32,8 @@ _REGISTRY: Dict[str, Type[Optimizer]] = {
     "Muon":    Muon,
     "Shampoo": Shampoo,
     "SOAP":    SOAP,
+    "SoftSignum": SoftSignum,
+    "SoftMuon":   SoftMuon,
 }
 
 
@@ -64,7 +67,7 @@ def get_optimizer(
         name: optimizer name. Case- and separator-insensitive. Accepted:
             ``"SGD"``, ``"AdamW"`` (alias ``"Adam"``), ``"SignSGD"``
             (alias ``"Signum"``), ``"Lion"``, ``"Muon"``, ``"Shampoo"``,
-            ``"SOAP"``.
+            ``"SOAP"``, ``"SoftSignum"``, ``"SoftMuon"``.
         auto_scale_lr: if ``True`` (default) and ``"lr"`` is present in
             ``hyperparameters``, rescale it through
             :func:`brain_opt.scale_lr` so that ``lr=1e-3`` works across

@@ -13,6 +13,14 @@ Public API:
     Shampoo   — Algorithm 2 from Gupta-Koren-Singer (2018). Matrix-method.
     SOAP      — ShampoO with Adam in the Preconditioner's eigenbasis
                 (Vyas et al., 2024). Matrix-method.
+    SoftSignum / SoftMuon — smooth relaxations of Signum and Muon
+                (BRAIn Lab method).
+    FedAvg / AsyncSGD / Async-Local SGD — single-process simulators for
+                distributed and federated optimization studies.
+    QSGD / MQSGD / AMQSGD — distributed SGD with Rand-m and Markovian
+                (BanLast, KAWASAKI) compression (BRAIn Lab method).
+    SimplexLoRA / WeightLoRA — adaptive rank and adapter selection for
+                LoRA (BRAIn Lab methods).
 
     get_optimizer(params, name, **kwargs)  — factory by name with
         unified learning rate (``lr=1e-3`` works across all methods).
@@ -25,13 +33,24 @@ of ``torch.optim.AdamW``).
 """
 from torch.optim import SGD, AdamW
 
+from .compression import CompressedConfig, RandSparsifier, run_amqsgd, run_qsgd
 from .factory import get_optimizer
+from .federated import (
+    AsyncConfig,
+    FedAvgConfig,
+    FederatedClient,
+    FederatedResult,
+    run_async_local_sgd,
+    run_async_sgd,
+    run_fedavg,
+)
 from .lion import Lion
 from .lr_scaling import LR_MULTIPLIERS, scale_lr
 from .muon import Muon
 from .shampoo import Shampoo
 from .sign_sgd import SignSGD
 from .soap import SOAP
+from .softsign import SoftMuon, SoftSignum
 
 __all__ = [
     "SGD",
@@ -41,9 +60,22 @@ __all__ = [
     "Muon",
     "Shampoo",
     "SOAP",
+    "SoftSignum",
+    "SoftMuon",
+    "FederatedClient",
+    "FederatedResult",
+    "FedAvgConfig",
+    "AsyncConfig",
+    "run_fedavg",
+    "run_async_sgd",
+    "run_async_local_sgd",
+    "CompressedConfig",
+    "RandSparsifier",
+    "run_qsgd",
+    "run_amqsgd",
     "get_optimizer",
     "scale_lr",
     "LR_MULTIPLIERS",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

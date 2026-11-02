@@ -14,6 +14,23 @@ image as `site-packages`.
 | Muon     | `brain_opt.Muon`    | D-Muon (Liu et al. 2025): Newton-Schulz orthogonalised momentum + decoupled WD, with AdamW fallback for 1-D params. **Matrix method.** |
 | Shampoo  | `brain_opt.Shampoo` | canonical Algorithm 2 from Gupta-Koren-Singer 2018. **Matrix method.** |
 | SOAP     | `brain_opt.SOAP`    | Adam in Shampoo's eigenbasis, Vyas et al. 2024. **Matrix method.** |
+| SoftSignum | `brain_opt.SoftSignum` | Signum with a temperature-controlled `tanh` instead of `sign` (BrainLab). |
+| SoftMuon | `brain_opt.SoftMuon` | Muon with soft saturation of singular values (BrainLab). **Matrix method.** |
+
+Federated / distributed optimization simulators are available under the
+same pure-Python package:
+
+| method            | function                         | purpose |
+|-------------------|----------------------------------|---------|
+| FedAvg            | `brain_opt.run_fedavg`           | synchronous federated averaging with configurable client sampling |
+| AsyncSGD          | `brain_opt.run_async_sgd`        | delayed client gradients with server-side staleness weighting |
+| Async-Local SGD   | `brain_opt.run_async_local_sgd`  | delayed local-SGD deltas with simulated latency/staleness |
+| QSGD / MQSGD      | `brain_opt.run_qsgd`             | compressed SGD with Rand-m or Markovian (BanLast, KAWASAKI) coordinate selection |
+| AMQSGD            | `brain_opt.run_amqsgd`           | accelerated compressed SGD with the same compressors |
+
+Parameter-efficient language model training (full fine-tuning, LoRA,
+SimplexLoRA, WeightLoRA) is available as `brain_opt.training` and the
+`brain-opt train` command; it needs the `training` extra.
 
 ## Install
 
@@ -22,13 +39,13 @@ image as `site-packages`.
 pip install git+https://github.com/Vepricov/brain-opt.git
 
 # From a built wheel (drop into a base image without network)
-pip install /path/to/brain_opt-0.1.0-py3-none-any.whl
+pip install /path/to/brain_opt-0.3.0-py3-none-any.whl
 
 # From a checkout
 pip install -e .
 ```
 
-The built wheel is `brain_opt-0.1.0-py3-none-any.whl` — a universal pure
+The built wheel is `brain_opt-0.3.0-py3-none-any.whl` — a universal pure
 Python 3 wheel. You can copy it into your base image and `pip
 install` it, or unpack the `brain_opt/` directory directly into your
 project's `site-packages`. No compilation, no native extensions, no
@@ -143,6 +160,117 @@ matrices automatically fall back to AdamW. You can override the
 classification by setting `state[p]["use_muon"]` after construction, or
 by passing `"use_muon": False` inside a parameter group.
 
+## Federated optimization simulators
+
+`brain_opt.federated` covers the distributed-optimization part of the
+package without requiring a real cluster. Clients are local PyTorch
+tensors; latency and staleness are simulated in one Python process. This
+is intended for reproducible method comparisons before wiring the methods
+into a real scheduler.
+
+```python
+import torch
+import torch.nn as nn
+
+from brain_opt import (
+    AsyncConfig,
+    FedAvgConfig,
+    FederatedClient,
+    run_async_local_sgd,
+    run_async_sgd,
+    run_fedavg,
+)
+
+clients = [
+    FederatedClient(x=torch.randn(32, 8), y=torch.randn(32, 1), name=f"c{i}")
+    for i in range(20)
+]
+model = nn.Linear(8, 1)
+
+# FedAvg with 5 active clients per round.
+fedavg = run_fedavg(
+    model,
+    clients,
+    FedAvgConfig(rounds=20, clients_per_round=5, local_steps=3, lr=0.05),
+)
+
+# Asynchronous updates with simulated delay and staleness weighting.
+async_sgd = run_async_sgd(
+    nn.Linear(8, 1),
+    clients,
+    AsyncConfig(updates=100, lr=0.02, max_pending=8, max_delay=5),
+)
+async_local = run_async_local_sgd(
+    nn.Linear(8, 1),
+    clients,
+    AsyncConfig(updates=100, local_steps=3, lr=0.05, max_pending=8),
+)
+```
+
+Every result exposes `result.model` and a list of metric dictionaries in
+`result.history`. Async histories include `time`, `staleness` and
+`staleness_weight`, which are the main quantities to plot against loss or
+accuracy in a simulation study.
+
+## BrainLab methods
+
+The package also ships methods developed at BrainLab.
+
+### SoftSignum and SoftMuon
+
+`SoftSignum` replaces `sign(m)` in Signum with `tanh(tau * m)`. The
+temperature is chosen every step so that a given share of coordinates
+stays in the linear regime; `alpha_sign` sets the fraction of training
+spent in the pure sign regime. `SoftMuon` applies the same idea to the
+singular values of the Muon momentum and is computed with Newton-Schulz
+iterations, without an SVD.
+
+```python
+opt = brain_opt.SoftSignum(model.parameters(), lr=1e-3, total_steps=10_000)
+opt = brain_opt.get_optimizer(model.parameters(), name="SoftMuon", lr=1e-3)
+```
+
+Code and experiments: https://github.com/brain-lab-research/softsign
+
+### Markovian compression (MQSGD, AMQSGD)
+
+Clients send a share `ratio` of gradient coordinates per round.
+`compressor="randm"` picks them uniformly at random (QSGD with Rand-m).
+`"banlast"` forbids coordinates sent during the last `history` rounds,
+`"kawasaki"` divides the probability of a coordinate by `forgetting` for
+every recent send. Both Markovian compressors remain unbiased in the
+long run.
+
+```python
+from brain_opt import CompressedConfig, run_amqsgd, run_qsgd
+
+cfg = CompressedConfig(rounds=100, lr=0.1, ratio=0.05,
+                       compressor="kawasaki", history=3, forgetting=2.0)
+mqsgd = run_qsgd(nn.Linear(8, 1), clients, cfg)
+amqsgd = run_amqsgd(nn.Linear(8, 1), clients, cfg)
+```
+
+### SimplexLoRA and WeightLoRA
+
+`TrainingConfig(mode=...)` accepts `"full"`, `"lora"`, `"simplexlora"`
+and `"weightlora"`. SimplexLoRA learns adapter importance weights on a
+simplex during a short search and redistributes the LoRA rank budget
+between layers. WeightLoRA keeps only the `keep` most important adapters
+after `selection_steps` steps and trains them as plain LoRA.
+
+```bash
+pip install -e ".[training]"
+brain-opt train config.json
+```
+
+`config.json` holds `base_checkpoint`, `train_text`, `validation_text`,
+`output_dir` and a `config` object with the `TrainingConfig` fields; the
+nested `simplex` or `weight_lora` objects take the fields of
+`SimplexLoRAConfig` and `WeightLoRAConfig`.
+
+Code and experiments: https://github.com/brain-lab-research/SimplexLoRA,
+https://github.com/brain-lab-research/WLoRA
+
 ## Sources / credit
 
 * Lion — https://github.com/google/automl/tree/master/lion
@@ -160,9 +288,11 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-15 smoke tests cover convergence of every method through the factory at
-`lr=1e-3`, the `scale_lr` mapping, factory name resolution and the
-public API.
+The tests cover convergence of every optimizer through the factory at
+`lr=1e-3`, the `scale_lr` mapping, factory name resolution, the public API,
+the federated and compressed simulators, SoftSignum and SoftMuon, and an
+offline LoRA / SimplexLoRA / WeightLoRA training round trip on a tiny
+random model.
 
 ## License
 

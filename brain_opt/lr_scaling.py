@@ -17,6 +17,8 @@ gives a reasonable effective lr for *general* use:
     Muon                           1e-2    (Keller Jordan / Liu et al., 2025)
     Shampoo                        1e-1    (Gupta et al., 2018 / jettify)
     SOAP                           3e-3    (Vyas et al., 2024)
+    SoftSignum                     1e-3    (as Signum)
+    SoftMuon                       1e-2    (as Muon)
 
 Note on Lion: Chen et al. 2023 report that for *large* Transformer
 training, Lion's optimum is ~3-10× smaller than AdamW (i.e. 1e-4 for
@@ -44,6 +46,8 @@ LR_MULTIPLIERS: Dict[str, float] = {
     "Muon":    10.0,   # 1e-3 → 1e-2
     "Shampoo": 100.0,  # 1e-3 → 1e-1
     "SOAP":     3.0,   # 1e-3 → 3e-3
+    "SoftSignum": 1.0,  # 1e-3 → 1e-3, as Signum
+    "SoftMuon":  10.0,  # 1e-3 → 1e-2, as Muon
 }
 
 
